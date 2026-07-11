@@ -16,6 +16,9 @@ export default defineConfig({
   plugins: [react(), ...(HTTPS ? [basicSsl()] : [])],
   server: {
     port: 5173,
+    // Allow access through a tunnel host (e.g. *.trycloudflare.com) — Vite 5
+    // otherwise blocks requests with an unknown Host header. Dev-only.
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: API_TARGET,
