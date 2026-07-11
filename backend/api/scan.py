@@ -25,6 +25,7 @@ for _p in (BACKEND_DIR / "data", BACKEND_DIR / "main"):
     if str(_p) not in sys.path:
         sys.path.append(str(_p))
 
+import openfacts_lookup  # noqa: E402
 import repairability_lookup as repair_lookup  # noqa: E402
 from ai import (  # noqa: E402
     _content_block,
@@ -40,6 +41,7 @@ router = APIRouter(tags=["scan"])
 # "Estimated" must be textually and visually distinct wherever a score is shown.
 PROV_VERIFIED = "Verified — French repairability index"
 PROV_ESTIMATED = "Estimated — AI analysis"
+PROV_ECO = "Verified — Open Food Facts environmental score"
 
 
 def _repair_payload(res):
@@ -66,18 +68,50 @@ def _carbon_payload(est):
     return {**est, "provenance": PROV_ESTIMATED}
 
 
+def _verified_carbon_payload(off, category):
+    """A VERIFIED environmental grade from Open Food Facts, or None.
+
+    This is real third-party data (the Eco-Score / Green-Score), not an AI guess,
+    so it carries the verified flag + provenance and takes precedence over the
+    estimate when a product actually has one."""
+    eco = off.get("eco") if off else None
+    if not eco:
+        return None
+    return {
+        "score": eco["score"],
+        "band": eco["band"],
+        "grade": eco.get("grade"),
+        "category": category,
+        "verified": True,
+        "source": "open_food_facts",
+        "sourceUrl": eco.get("sourceUrl"),
+        "provenance": PROV_ECO,
+        "rationale": "Open Food Facts Eco-Score — a measured environmental impact grade, not an AI guess.",
+    }
+
+
 def _build_scan(*, gtin, repair_res, product_name, brand, category, image_block=None):
     """Assemble the combined ScanResult. Never raises for a missing score — an
     absent repairability match becomes needs_contribution, and a failed carbon
     estimate becomes a null carbon block."""
-    name = product_name or (repair_res.product_name if repair_res else None) or "Unknown product"
-    brand = brand or (repair_res.brand if repair_res else None)
-    category = category or (repair_res.category if repair_res else None)
+    # Verified product identity + environmental grade from Open Food Facts (real,
+    # crowd-sourced, no API key). Best-effort: None when offline or not found.
+    off = openfacts_lookup.lookup_by_gtin(gtin) if gtin else None
 
-    # Only estimate carbon when there's something to describe (a name or a photo).
-    carbon = None
-    if name != "Unknown product" or image_block is not None:
-        carbon = estimate_carbon_from_category(name, category, image_block=image_block)
+    name = (
+        product_name
+        or (repair_res.product_name if repair_res else None)
+        or (off.get("product_name") if off else None)
+        or "Unknown product"
+    )
+    brand = brand or (repair_res.brand if repair_res else None) or (off.get("brand") if off else None)
+    category = category or (repair_res.category if repair_res else None) or (off.get("category") if off else None)
+
+    # Carbon/environmental grade: prefer a VERIFIED Open Food Facts eco-score;
+    # only fall back to the clearly-labelled AI estimate when none exists.
+    carbon = _verified_carbon_payload(off, category)
+    if carbon is None and (name != "Unknown product" or image_block is not None):
+        carbon = _carbon_payload(estimate_carbon_from_category(name, category, image_block=image_block))
 
     alt = repair_lookup.better_alternative(repair_res) if repair_res else None
     alternative = None
@@ -92,10 +126,13 @@ def _build_scan(*, gtin, repair_res, product_name, brand, category, image_block=
         "productName": name,
         "brand": brand,
         "category": category,
+        "productImage": (off.get("image_url") if off else None),
         "repairability": _repair_payload(repair_res),
-        "carbon": _carbon_payload(carbon),
+        "carbon": carbon,  # already provenance-tagged (verified or estimated)
         "alternative": alternative,
-        "needs_contribution": repair_res is None,
+        # Ask for a community submission only when we found nothing at all — not
+        # when Open Food Facts already identified the product.
+        "needs_contribution": repair_res is None and off is None,
     }
     scan["narrative"] = generate_scan_narrative(scan)
     return scan

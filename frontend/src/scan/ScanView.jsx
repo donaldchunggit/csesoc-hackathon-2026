@@ -112,9 +112,10 @@ export default function ScanView() {
       )}
 
       <p style={{ fontSize: 11, color: T.faint, lineHeight: 1.6, marginTop: 40 }}>
-        Repairability scores come from the French durability/repairability index (verified). Carbon grades
-        are coarse AI estimates from the product category — a starting point, not a measured figure. Every
-        score on this page is labelled with where it came from.
+        Repairability scores come from the French durability/repairability index. Environmental grades use
+        the verified Open Food Facts Eco-Score where a product has one, and otherwise fall back to a
+        clearly-labelled AI estimate from the product category. Every score on this page is badged with
+        where it came from — Verified or Estimated.
       </p>
     </div>
   )

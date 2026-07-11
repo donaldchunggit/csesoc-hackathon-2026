@@ -635,10 +635,12 @@ You are given a JSON object with scores that have ALREADY been computed. Use ONL
 invent a number, a material, or a claim not present in the JSON.
 
 Rules:
-- Mention the repairability grade and the carbon grade in plain words. If a score is null, say we don't
-  have that data yet — do not guess one.
-- Repairability is "verified" (an official durability/repairability index); carbon is "estimated" (an AI
-  guess from the product category, not measured). Make that difference clear and never blur the two.
+- Mention the repairability grade and the carbon/environmental grade in plain words. If a score is null,
+  say we don't have that data yet — do not guess one.
+- Repairability, when present, is "verified" (an official durability/repairability index).
+- For the carbon/environmental grade, check `carbon.verified`: if true it is a VERIFIED environmental
+  score from Open Food Facts (a measured Eco-Score, not a guess); if false/absent it is an AI ESTIMATE
+  from the product category (not measured). Say which one it is and never blur verified vs estimated.
 - If an alternative is provided, mention it by name as a better-scoring option.
 - Warm, direct, shopper-friendly. No markdown, no emoji, no headings."""
 
@@ -678,10 +680,16 @@ def _scan_narrative_fallback(scan):
         parts.append(f"We don't yet have verified repairability data for {name}.")
     c = scan.get("carbon") or {}
     if c.get("score") is not None:
-        parts.append(
-            f"Its estimated carbon grade is {str(c.get('band') or '').lower()} ({c['score']}/100), "
-            "an AI estimate from the product category rather than a measured figure."
-        )
+        if c.get("verified"):
+            parts.append(
+                f"Its environmental grade is {str(c.get('band') or '').lower()} ({c['score']}/100), "
+                "a verified Open Food Facts Eco-Score."
+            )
+        else:
+            parts.append(
+                f"Its estimated carbon grade is {str(c.get('band') or '').lower()} ({c['score']}/100), "
+                "an AI estimate from the product category rather than a measured figure."
+            )
     alt = scan.get("alternative")
     if alt:
         parts.append(f"A better-scoring option is {alt['productName']} ({alt['score']}/100).")

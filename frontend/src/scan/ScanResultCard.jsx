@@ -122,12 +122,23 @@ export default function ScanResultCard({ scan }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 4, fontSize: 12, color: T.muted }}>
-        {scan.brand ? scan.brand + ' · ' : ''}{scan.category || 'Product'}{scan.gtin ? ` · ${scan.gtin}` : ''}
+      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 18 }}>
+        {scan.productImage && (
+          <img
+            src={scan.productImage}
+            alt=""
+            style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 12, border: `1px solid ${T.line}`, background: T.cardAlt, flexShrink: 0 }}
+          />
+        )}
+        <div>
+          <div style={{ marginBottom: 4, fontSize: 12, color: T.muted }}>
+            {scan.brand ? scan.brand + ' · ' : ''}{scan.category || 'Product'}{scan.gtin ? ` · ${scan.gtin}` : ''}
+          </div>
+          <h2 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', margin: 0 }}>
+            {scan.productName || 'Scanned product'}
+          </h2>
+        </div>
       </div>
-      <h2 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', margin: '0 0 18px' }}>
-        {scan.productName || 'Scanned product'}
-      </h2>
 
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
         <Reveal index={0} style={{ display: 'flex', flex: 1, minWidth: 200 }}>
@@ -141,10 +152,10 @@ export default function ScanResultCard({ scan }) {
         </Reveal>
         <Reveal index={1} style={{ display: 'flex', flex: 1, minWidth: 200 }}>
           <GradeTile
-            title="Carbon"
+            title={c?.verified ? 'Environmental' : 'Carbon'}
             score={c?.score}
             band={c?.band}
-            provenanceKind={c ? 'estimated' : 'none'}
+            provenanceKind={c ? (c.verified ? 'verified' : 'estimated') : 'none'}
             confidence={c?.confidence}
             caption={c ? (c.provenance + (c.rationale ? ` — ${c.rationale}` : '')) : 'No carbon estimate available.'}
           />
