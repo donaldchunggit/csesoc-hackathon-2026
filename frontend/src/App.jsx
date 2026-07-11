@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect, useRef } from 'react'
 import {
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
   ResponsiveContainer, Legend, Tooltip,
@@ -61,6 +61,14 @@ const eyebrow = { fontSize: 11, fontWeight: 400, color: T.muted, textTransform: 
 
 // How many library entries are credited to the Materiom Commons.
 const MATERIOM_COUNT = DATA.filter((d) => d.source === 'materiom').length
+
+// Human-readable material name for dropdowns / labels (drops the internal underscores).
+const prettyMat = (name) => String(name || '').replace(/_/g, ' ')
+
+// Library materials grouped by category — powers the material-review dropdown.
+const MATERIAL_GROUPS = CATEGORIES.filter((c) => c !== 'all')
+  .map((cat) => ({ cat, items: DATA.filter((d) => d.category === cat) }))
+  .filter((g) => g.items.length)
 
 // Credits a bio-based recipe family to the Materiom Commons.
 function MateriomBadge({ big }) {
@@ -640,7 +648,277 @@ function DesignFixes({ recommendations }) {
   )
 }
 
-function ResultsView({ setView, bom: bomInput, meta, warnings }) {
+// One friendly mass entry: type freely, or nudge with − / +. Holds its own text
+// state so mid-typing (e.g. "0.", "0.3") never fights the coerced model value,
+// while every change still flows to onSet so the analysis stays live. When the
+// field carries a not-yet-confirmed estimate, an accept (✓) button confirms it
+// as-is; typing or nudging also counts as confirming.
+function MassField({ index, initial, filled, estimated, inputRef, onSet, onEnter }) {
+  const [text, setText] = useState(initial)
+
+  const commit = (v) => { setText(v); onSet(index, v) }
+  const accept = () => onSet(index, text || '1')
+  const nudge = (delta) => {
+    const base = parseFloat(text)
+    const next = Math.max(0, Math.round(((Number.isFinite(base) ? base : 0) + delta) * 1000) / 1000)
+    commit(String(next))
+  }
+
+  // Palette shifts from "estimated" (ochre) to "using your number" (green).
+  const rgb = filled ? '91,122,78' : '168,122,60'
+  const stepBtn = {
+    width: 30, height: 34, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    border: 'none', background: 'transparent', color: T.ink3, fontSize: 18, lineHeight: 1,
+    cursor: 'pointer', padding: 0, fontFamily: 'Nunito, sans-serif',
+  }
+  const hover = (on) => (e) => { e.currentTarget.style.background = on ? 'rgba(35,33,28,0.06)' : 'transparent' }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+      <div style={{ display: 'inline-flex', alignItems: 'center', background: `rgba(${rgb},0.07)`, border: `1px solid rgba(${rgb},0.5)`, borderRadius: 10, overflow: 'hidden', transition: 'border-color .16s, background .16s' }}>
+        <button type="button" onClick={() => nudge(-0.1)} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
+          aria-label={`Decrease mass by 0.1 kilograms`} title="−0.1 kg" style={stepBtn}>−</button>
+        <input
+          ref={inputRef}
+          type="text" inputMode="decimal" placeholder="1"
+          aria-label={`Mass in kilograms`}
+          value={text}
+          onChange={(e) => { const v = e.target.value; if (/^\d*\.?\d*$/.test(v)) commit(v) }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onEnter(index) } }}
+          onFocus={(e) => e.target.select()}
+          className="mono"
+          style={{ width: 52, textAlign: 'right', padding: '8px 2px 8px 6px', fontSize: 13.5, background: 'transparent', color: T.ink, border: 'none', outline: 'none' }}
+        />
+        <span className="mono" style={{ fontSize: 11.5, color: T.muted, padding: '0 5px 0 3px', userSelect: 'none' }}>kg</span>
+        <button type="button" onClick={() => nudge(0.1)} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
+          aria-label={`Increase mass by 0.1 kilograms`} title="+0.1 kg" style={stepBtn}>+</button>
+      </div>
+      {estimated && !filled && (
+        <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, color: T.warn, textTransform: 'uppercase', letterSpacing: '0.06em', flexShrink: 0 }}>est</span>
+      )}
+      <span style={{ width: 24, display: 'inline-flex', justifyContent: 'center', flexShrink: 0 }}>
+        {filled
+          ? <Icon size={16} stroke={T.good} sw={2.5} d={['M20 6 9 17l-5-5']} />
+          : (text && (
+              <button type="button" onClick={accept} title="Use this mass" aria-label="Confirm this mass"
+                style={{ width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid rgba(91,122,78,0.5)`, background: 'rgba(91,122,78,0.08)', borderRadius: 7, cursor: 'pointer', padding: 0 }}>
+                <Icon size={13} stroke={T.good} sw={2.5} d={['M20 6 9 17l-5-5']} />
+              </button>
+            ))}
+      </span>
+    </div>
+  )
+}
+
+// Rows whose mass couldn't be read from the file get a friendly entry here so the
+// user supplies their real figure; each entry updates the BOM and re-runs the
+// analysis. Blank inputs keep the provisional 1 kg estimate. The panel tracks
+// progress and turns calm-green once every mass is filled in.
+function MissingMassPanel({ bom, missing, onSet }) {
+  const inputRefs = useRef({})
+  if (!missing.length) return null
+  const total = missing.length
+  const filled = missing.filter((i) => !bom[i].kgMissing).length
+  const allDone = filled === total
+  const anyEst = missing.some((i) => bom[i].kgEstimated)
+  const pct = Math.round((filled / total) * 100)
+  const rgb = allDone ? '91,122,78' : '168,122,60'
+  const headColor = allDone ? T.good : T.warn
+
+  // Enter on a field hops to the next one still missing a mass, wrapping around;
+  // if none are left, it just blurs so the keyboard/focus gets out of the way.
+  const focusNextEmpty = (fromIndex) => {
+    const start = missing.indexOf(fromIndex)
+    for (let k = 1; k <= total; k++) {
+      const idx = missing[(start + k) % total]
+      if (idx === fromIndex) break
+      if (bom[idx].kgMissing) {
+        const el = inputRefs.current[idx]
+        if (el) { el.focus(); el.select?.() }
+        return
+      }
+    }
+    inputRefs.current[fromIndex]?.blur()
+  }
+
+  return (
+    <div className="no-print" style={{ background: `rgba(${rgb},0.07)`, border: `1px solid rgba(${rgb},0.34)`, borderRadius: 14, padding: '16px 18px', marginBottom: 20, transition: 'background .2s, border-color .2s' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 11 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ display: 'inline-flex', width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center', background: `rgba(${rgb},0.15)` }}>
+            {allDone
+              ? <Icon size={15} stroke={T.good} sw={2.4} d={['M20 6 9 17l-5-5']} />
+              : <Icon size={15} stroke={T.warn} sw={2.1} d={['M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z', 'M12 9v4', 'M12 17h.01']} />}
+          </span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>
+            {allDone ? 'All masses added' : 'Add the missing masses'}
+          </span>
+        </div>
+        <div className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: headColor }}>
+          {allDone ? 'Using your figures' : `${filled} of ${total} added`}
+        </div>
+      </div>
+
+      <div style={{ height: 5, borderRadius: 99, background: `rgba(${rgb},0.18)`, overflow: 'hidden', marginBottom: 13 }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: headColor, borderRadius: 99, transition: 'width .3s ease' }} />
+      </div>
+
+      <div style={{ fontSize: 12.5, color: T.ink2, lineHeight: 1.5, marginBottom: 14 }}>
+        {allDone
+          ? 'Every component now uses the mass you confirmed — the carbon and cost figures below reflect your real numbers.'
+          : anyEst
+            ? <>We couldn't read a mass for these components, so we've estimated one for each (marked <span className="mono" style={{ fontWeight: 700, color: T.warn }}>EST</span>). Accept it with ✓, nudge it, or type the real figure — the numbers below update instantly.</>
+            : <>We couldn't read a mass for these components, so each is a provisional 1&nbsp;kg. Enter the real figure to make the carbon and cost numbers accurate.</>}
+      </div>
+
+      <div style={{ display: 'grid', gap: 8 }}>
+        {missing.map((i) => {
+          const done = !bom[i].kgMissing
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: T.card, border: `1px solid ${T.line}`, borderRadius: 10, padding: '10px 13px' }}>
+              <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{bom[i].component}</div>
+                <div className="mono" style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{prettyMat(bom[i].from)}</div>
+              </div>
+              <MassField
+                index={i}
+                initial={done || bom[i].kgEstimated ? String(bom[i].kg) : ''}
+                filled={done}
+                estimated={!!bom[i].kgEstimated}
+                inputRef={(el) => { inputRefs.current[i] = el }}
+                onSet={onSet}
+                onEnter={focusNextEmpty}
+              />
+            </div>
+          )
+        })}
+      </div>
+
+      {total > 1 && !allDone && (
+        <div className="mono" style={{ fontSize: 10.5, color: T.faint, marginTop: 11 }}>
+          Tip — press Enter to jump to the next field.
+        </div>
+      )}
+    </div>
+  )
+}
+
+// A material the file used that wasn't in the swap library gets a best-guess
+// stand-in (from the parser) plus a dropdown here to confirm or correct it —
+// rather than being silently dropped. Picking a material re-runs the analysis.
+function MaterialReviewPanel({ bom, review, onSetMaterial }) {
+  if (!review.length) return null
+  const total = review.length
+  const done = review.filter((i) => bom[i].materialReviewed).length
+  const allDone = done === total
+  const rgb = allDone ? '91,122,78' : '30,61,43'   // green when confirmed, else forest accent
+  const headColor = allDone ? T.good : T.accent
+  const pct = Math.round((done / total) * 100)
+
+  const select = {
+    appearance: 'none', WebkitAppearance: 'none', maxWidth: 210,
+    padding: '8px 30px 8px 11px', fontSize: 12.5, fontFamily: "'Geist Mono', monospace",
+    background: `${T.page} url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238A857A' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>") no-repeat right 9px center`,
+    color: T.ink, border: `1px solid ${T.line}`, borderRadius: 9, cursor: 'pointer', outline: 'none',
+  }
+
+  return (
+    <div className="no-print" style={{ background: `rgba(${rgb},0.06)`, border: `1px solid rgba(${rgb},0.30)`, borderRadius: 14, padding: '16px 18px', marginBottom: 20, transition: 'background .2s, border-color .2s' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 11 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ display: 'inline-flex', width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center', background: `rgba(${rgb},0.14)` }}>
+            {allDone
+              ? <Icon size={15} stroke={T.good} sw={2.4} d={['M20 6 9 17l-5-5']} />
+              : <Icon size={15} stroke={T.accent} sw={2.1} d={['M11 3 8 9l-6 .75 4.13 4.62L5 21l6-3 6 3-1.13-6.63L20 9.75 14 9z']} />}
+          </span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>
+            {allDone ? 'Materials confirmed' : 'Confirm the materials we matched'}
+          </span>
+        </div>
+        <div className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: headColor }}>
+          {allDone ? 'Using your choices' : `${done} of ${total} confirmed`}
+        </div>
+      </div>
+
+      <div style={{ height: 5, borderRadius: 99, background: `rgba(${rgb},0.16)`, overflow: 'hidden', marginBottom: 13 }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: headColor, borderRadius: 99, transition: 'width .3s ease' }} />
+      </div>
+
+      <div style={{ fontSize: 12.5, color: T.ink2, lineHeight: 1.5, marginBottom: 14 }}>
+        {allDone
+          ? 'Every material below now uses a library material you picked — nothing was dropped.'
+          : "These materials weren't an exact match in the swap library, so we stood in the closest one. Confirm each or choose a better fit — the analysis updates instantly."}
+      </div>
+
+      <div style={{ display: 'grid', gap: 8 }}>
+        {review.map((i) => {
+          const row = bom[i]
+          const reviewed = !!row.materialReviewed
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: T.card, border: `1px solid ${T.line}`, borderRadius: 10, padding: '10px 13px' }}>
+              <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>
+                  {row.component}
+                  {row.materialRaw && <span style={{ color: T.muted, fontWeight: 400 }}> · read as “{row.materialRaw}”</span>}
+                </div>
+                <div style={{ fontSize: 11.5, color: reviewed ? T.good : T.ink3, marginTop: 2, lineHeight: 1.45 }}>
+                  {reviewed ? `Now using ${prettyMat(row.from)}` : row.materialReason}
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <select value={row.from} onChange={(e) => onSetMaterial(i, e.target.value)}
+                  aria-label={`Material for ${row.component}`} style={select}>
+                  {MATERIAL_GROUPS.map((g) => (
+                    <optgroup key={g.cat} label={g.cat}>
+                      {g.items.map((d) => (
+                        <option key={d.name} value={d.name}>
+                          {prettyMat(d.name)}{d.co2e_per_kg != null ? ` · ${d.co2e_per_kg} CO₂e/kg` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <span style={{ width: 18, display: 'inline-flex', flexShrink: 0 }}>
+                  {reviewed && <Icon size={16} stroke={T.good} sw={2.5} d={['M20 6 9 17l-5-5']} />}
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ResultsView({ setView, bom: initialBom, meta, warnings }) {
+  // Editable copy of the parsed BOM. Rows flagged kgMissing get filled in via the
+  // MissingMassPanel below, which updates a mass here and re-runs the analysis.
+  const [bomInput, setBomInput] = useState(initialBom)
+  useEffect(() => { setBomInput(initialBom) }, [initialBom])
+
+  // Indices of rows that were missing a mass on upload (stable across edits, so the
+  // input stays put once filled rather than disappearing mid-type).
+  const missingMass = initialBom
+    .map((row, i) => (row.kgMissing ? i : -1))
+    .filter((i) => i >= 0)
+
+  const setRowKg = (index, value) => setBomInput((prev) => prev.map((row, i) => {
+    if (i !== index) return row
+    const n = parseFloat(value)
+    return (Number.isFinite(n) && n > 0)
+      ? { ...row, kg: Math.round(n * 1000) / 1000, kgMissing: false }
+      : { ...row, kg: 1, kgMissing: true }
+  }))
+
+  // Indices of rows whose material wasn't an exact library match (stood in with a
+  // proxy). Stable across edits so the dropdown row stays put once confirmed.
+  const materialReview = initialBom
+    .map((row, i) => (row.materialConfidence === 'proxy' ? i : -1))
+    .filter((i) => i >= 0)
+
+  const setRowMaterial = (index, name) => setBomInput((prev) => prev.map((row, i) =>
+    i === index ? { ...row, from: name, materialReviewed: true } : row))
+
   const [carbonWeight, setCarbonWeight] = useState(0.6)
   const [annualVolume, setAnnualVolume] = useState(10000)
   const [analysis, setAnalysis] = useState(null)
@@ -653,13 +931,15 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
   // work keys on a debounced copy, so dragging fires one analyze + one summary
   // once the slider settles rather than on every tick.
   const debouncedWeight = useDebounced(carbonWeight, 220)
+  // Debounced so filling in several missing masses fires one analyze pass, not one per keystroke.
+  const debouncedBom = useDebounced(bomInput, 350)
 
   // The upload/slider → analyzer seam. This is the single call site a real
   // POST /analyze-bom backend slots into (see analysis.js).
   useEffect(() => {
     let live = true
     setLoading(true)
-    analyzeBom(bomInput, { carbon: debouncedWeight }).then((res) => {
+    analyzeBom(debouncedBom, { carbon: debouncedWeight }).then((res) => {
       if (!live) return
       setAnalysis(res)
       setSource(lastSource)
@@ -670,7 +950,7 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
         : new Set(res.lines.map((l, i) => (l.status === 'red' ? i : -1)).filter((i) => i >= 0))))
     })
     return () => { live = false }
-  }, [bomInput, debouncedWeight])
+  }, [debouncedBom, debouncedWeight])
 
   // Grounded plain-language summary (Claude). Re-runs when the BOM changes or the
   // slider settles; the "Regenerate" control forces a fresh one. Degrades quietly
@@ -685,7 +965,7 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
     let live = true
     runNarrative(debouncedWeight, () => live)
     return () => { live = false }
-  }, [bomInput, debouncedWeight])
+  }, [debouncedBom, debouncedWeight])
 
   const totalKg = bomInput.reduce((s, b) => s + b.kg, 0)
   const toggle = (i) => setExpanded((prev) => {
@@ -756,6 +1036,10 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
           </button>
         </div>
       </div>
+
+      <MaterialReviewPanel bom={bomInput} review={materialReview} onSetMaterial={setRowMaterial} />
+
+      <MissingMassPanel bom={bomInput} missing={missingMass} onSet={setRowKg} />
 
       {warnings && warnings.length > 0 && (
         <div className="no-print" style={{ background: 'rgba(168,122,60,0.08)', border: '1px solid rgba(168,122,60,0.34)', borderRadius: 12, padding: '13px 16px', marginBottom: 20 }}>

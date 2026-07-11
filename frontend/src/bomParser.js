@@ -102,6 +102,48 @@ export function matchMaterial(raw) {
   return null
 }
 
+// When a material isn't in the library, stand in the closest representative of
+// its category so the row survives (flagged for the user to confirm) instead of
+// being dropped. Names must exist in DATA.
+const CATEGORY_PROXY = {
+  metal: 'steel', plastic: 'ABS', bioplastic: 'PLA', wood: 'FSC_plywood',
+  natural: 'cork', biocomposite: 'bamboo_composite', composite: 'glass_fiber_composite',
+}
+
+// Keyword → category, checked in order (bioplastic before plastic so "biopolymer"
+// isn't swallowed by the "plastic" substring, etc.).
+const CATEGORY_KEYWORDS = [
+  ['metal', ['metal', 'alloy', 'steel', 'iron', 'alumin', 'zinc', 'brass', 'copper', 'bronze', 'titanium', 'magnesium', 'chrome', 'nickel', 'tin']],
+  ['wood', ['wood', 'timber', 'plywood', 'oak', 'bamboo', 'mdf', 'birch', 'pine', 'walnut', 'maple']],
+  ['bioplastic', ['bioplastic', 'biopolymer', 'starch', 'alginate', 'chitosan', 'gelatin', 'agar']],
+  ['biocomposite', ['composite', 'fiber', 'fibre', 'hemp', 'flax', 'cellulose', 'coir', 'jute']],
+  ['natural', ['cork', 'wool', 'felt', 'leather', 'cotton', 'mycelium', 'paper', 'cardboard', 'rubber', 'silicone', 'latex']],
+  ['plastic', ['plastic', 'polymer', 'resin', 'nylon', 'polyamide', 'polycarbonate', 'pvc', 'acrylic', 'pmma', 'abs', 'hdpe', 'ldpe', 'polyethylene', 'polypropylene', 'pet', 'tpu', 'tpe', 'foam', 'polyurethane', 'styrene']],
+]
+
+const prettyMat = (name) => String(name).replace(/_/g, ' ')
+
+function inferCategory(raw) {
+  const n = String(raw || '').toLowerCase()
+  for (const [cat, kws] of CATEGORY_KEYWORDS) if (kws.some((k) => n.includes(k))) return cat
+  return null
+}
+
+// Best-effort resolve a free-text material to a library entry. Returns
+// { name, confidence: 'high' | 'proxy', reason }. 'proxy' means we stood in the
+// closest category match for the user to confirm rather than dropping the row.
+export function resolveMaterial(raw) {
+  const direct = matchMaterial(raw)
+  if (direct) return { name: direct, confidence: 'high', reason: '' }
+  const clean = String(raw || '').trim() || 'this material'
+  const cat = inferCategory(clean)
+  const proxy = CATEGORY_PROXY[cat] || CATEGORY_PROXY.plastic
+  const reason = cat
+    ? `"${clean}" isn't in the swap library — using ${prettyMat(proxy)} as the closest ${cat} stand-in. Confirm or pick a better fit.`
+    : `Couldn't place "${clean}" in the swap library — using ${prettyMat(proxy)} as a placeholder. Confirm or pick a better fit.`
+  return { name: proxy, confidence: 'proxy', reason }
+}
+
 // --- swap recommendation ---------------------------------------------------
 // Pick a lower-carbon library material that keeps enough structural strength.
 // Prefers a recycled/same-family variant, then lowest embodied carbon, then
@@ -183,15 +225,17 @@ export function parseBomCsv(text, fileName) {
     const component = (idx.component !== undefined && cells[idx.component]?.trim())
       || `Component ${rows.length + 1}`
 
-    const from = matchMaterial(rawMat)
-    if (!from) {
-      warnings.push(`Row ${lineNo}: "${rawMat.trim()}" isn't in the material library — skipped.`)
-      return
-    }
+    // Never drop a component: an unmatched material is stood in with the closest
+    // library material (flagged 'proxy' for the user to confirm below).
+    const resolved = resolveMaterial(rawMat)
+    const from = resolved.name
 
     let kg = idx.kg !== undefined ? parseKg(cells[idx.kg]) : NaN
+    // Missing/invalid mass: flag the row so the results view can ask the user to
+    // fill it in, but keep a provisional 1 kg so the analysis still runs meanwhile.
+    let kgMissing = false
     if (!Number.isFinite(kg) || kg <= 0) {
-      warnings.push(`Row ${lineNo} (${component}): missing or invalid mass — defaulted to 1 kg.`)
+      kgMissing = true
       kg = 1
     }
 
@@ -205,11 +249,22 @@ export function parseBomCsv(text, fileName) {
     const fastening = (idx.fastening !== undefined && cells[idx.fastening]?.trim()) || ''
     const sourcing = (idx.sourcing !== undefined && cells[idx.sourcing]?.trim()) || ''
 
-    rows.push({ component, from, to, kg: Math.round(kg * 1000) / 1000, fastening, sourcing })
+    const row = { component, from, to, kg: Math.round(kg * 1000) / 1000, kgMissing, kgEstimated: false, fastening, sourcing }
+    if (resolved.confidence === 'proxy') {
+      row.materialConfidence = 'proxy'
+      row.materialRaw = String(rawMat).trim()
+      row.materialReason = resolved.reason
+    }
+    rows.push(row)
   })
 
   if (!rows.length && !warnings.length) {
     warnings.push('No usable rows found in the file.')
+  }
+
+  const proxyCount = rows.filter((r) => r.materialConfidence === 'proxy').length
+  if (proxyCount) {
+    warnings.push(`${proxyCount} material${proxyCount > 1 ? 's' : ''} weren't in the swap library — we filled in the closest match for you to confirm below.`)
   }
 
   const totalKg = rows.reduce((s, b) => s + b.kg, 0)
