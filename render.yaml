@@ -1,0 +1,18 @@
+# Render Blueprint — deploys the FastAPI backend.
+# In Render: New → Blueprint → pick this repo. It reads this file.
+# After the first deploy, set ANTHROPIC_API_KEY in the service's Environment tab
+# (it's marked sync:false so it is NOT stored in git).
+services:
+  - type: web
+    name: ecocompass-api
+    runtime: python
+    plan: free # free tier sleeps after ~15 min idle → slow first request. Fine for a demo.
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false # set this manually in the Render dashboard — never commit it
+      - key: PYTHON_VERSION
+        value: "3.11"
