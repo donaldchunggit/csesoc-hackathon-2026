@@ -155,6 +155,82 @@ def generate_narrative(bom, weights=None, product_name="This build"):
 
 
 # ---------------------------------------------------------------------------
+# 3) Government-incentive finder (grounded web search)
+# ---------------------------------------------------------------------------
+# Uses Claude's server-side web_search tool so every program is a REAL result
+# with a source URL the user can verify — no fabricated grants. Same "the model
+# only reports what it found" discipline as the rest of the app.
+_INCENTIVES_SYSTEM = """You are a sustainability-incentives researcher for a hardware manufacturer.
+Use web search to find CURRENT, REAL government incentives — grants, rebates, tax credits,
+low-interest loans, or R&D programs — that could help a company manufacture the described product
+more sustainably (lower-carbon or recycled materials, local sourcing, repairable/circular design).
+Search official government and agency sources for the specified region.
+
+Rules:
+- Only include programs you actually found via web search, each with a real source URL. NEVER
+  invent a program, an amount, or a link. If you find nothing credible, return an empty list.
+- Prefer official government / agency pages over blogs or aggregators.
+- Keep each summary to one or two plain sentences: what it offers and who qualifies.
+- Order by relevance to sustainable manufacturing and materials.
+
+Respond with ONLY a JSON object of this exact shape and nothing else:
+{"incentives": [{"name": string, "provider": string, "level": string, "summary": string, "url": string, "relevance": string}]}
+where "level" is one of "federal", "state", "local", or "other"."""
+
+# web_search_20260209 (dynamic filtering) requires Opus 4.8/4.7/4.6 or Sonnet 5/4.6 — the default
+# MODEL (claude-opus-4-8) qualifies. It's a server-side tool: results come back as content blocks.
+_WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_uses": 5}
+
+
+def generate_incentives(product_name="this product", materials="", region="Australia"):
+    user = (
+        f"Region: {region}\n"
+        f"Product: {product_name}\n"
+        f"Key materials / sustainability context: "
+        f"{materials or 'lower-carbon and recycled material swaps, repairable design'}\n\n"
+        "Find government incentives in this region that could support making this product more "
+        "sustainably. Return the specified JSON."
+    )
+    messages = [{"role": "user", "content": user}]
+    msg = None
+    # The server-side search loop can stop with pause_turn; resume until it finishes.
+    for _ in range(4):
+        msg = client().messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            system=_INCENTIVES_SYSTEM,
+            tools=[_WEB_SEARCH_TOOL],
+            messages=messages,
+        )
+        if msg.stop_reason != "pause_turn":
+            break
+        messages.append({"role": "assistant", "content": msg.content})
+
+    text = "".join(b.text for b in (msg.content if msg else []) if b.type == "text")
+    try:
+        parsed = _extract_json(text)
+    except (ValueError, json.JSONDecodeError):
+        parsed = {}
+
+    rows = []
+    for it in (parsed.get("incentives") if isinstance(parsed, dict) else None) or []:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()
+        if not name:
+            continue
+        rows.append({
+            "name": name,
+            "provider": str(it.get("provider") or "").strip(),
+            "level": (str(it.get("level") or "other").strip().lower() or "other"),
+            "summary": str(it.get("summary") or "").strip(),
+            "url": str(it.get("url") or "").strip(),
+            "relevance": str(it.get("relevance") or "").strip(),
+        })
+    return {"region": region, "incentives": rows}
+
+
+# ---------------------------------------------------------------------------
 # 2) BOM extraction from arbitrary files
 # ---------------------------------------------------------------------------
 _KNOWN = [d["name"] for d in DATA]

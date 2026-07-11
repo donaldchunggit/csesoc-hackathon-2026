@@ -17,7 +17,7 @@ load_dotenv(BACKEND_DIR / ".env")
 sys.path.append(str(BACKEND_DIR / "main"))
 from parse import parse_csv  # noqa: E402
 from score import analyze_bom  # noqa: E402
-from ai import ai_configured, extract_bom, generate_narrative  # noqa: E402
+from ai import ai_configured, extract_bom, generate_incentives, generate_narrative  # noqa: E402
 from main import library_summary, match_library, score_repairability  # noqa: E402  (data/reference-library pipeline)
 
 
@@ -103,7 +103,7 @@ def read_root():
         "service": "ecocompass",
         "status": "ok",
         "ai": ai_configured(),
-        "endpoints": ["/upload-csv", "/analyze-bom", "/library-compare", "/narrative", "/extract-bom"],
+        "endpoints": ["/upload-csv", "/analyze-bom", "/library-compare", "/narrative", "/extract-bom", "/incentives"],
     }
 
 
@@ -121,6 +121,25 @@ def narrative_endpoint(payload: dict = Body(...)):
     product = payload.get("productName") or "This build"
     try:
         return {"narrative": generate_narrative(bom, weights, product)}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — never 500; surface as a 503 the UI can show
+        raise _ai_unavailable(exc)
+
+
+@app.post("/incentives")
+def incentives_endpoint(payload: dict = Body(...)):
+    """Find real government sustainability incentives via Claude's web search tool.
+
+    Body: { "productName"?, "materials"?, "region"? }
+    Returns { "region", "incentives": [{name, provider, level, summary, url, relevance}] }.
+    Every program is a live web-search result with a source URL — nothing fabricated.
+    """
+    product = payload.get("productName") or "this product"
+    materials = payload.get("materials") or ""
+    region = payload.get("region") or "Australia"
+    try:
+        return generate_incentives(product, materials, region)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 — never 500; surface as a 503 the UI can show
