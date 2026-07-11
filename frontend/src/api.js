@@ -41,3 +41,19 @@ export async function fetchNarrative(bom, weights, productName) {
   }
   return res.json() // { narrative }
 }
+
+// Government-incentive finder — Claude searches the live web for real grants /
+// rebates / tax credits in the chosen region, each with a source URL. Slower
+// (it hits the web), so the UI triggers it on demand.
+export async function fetchIncentives({ productName, materials, region }) {
+  const res = await fetch('/api/incentives', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ productName, materials, region }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.detail || `Incentives lookup failed (${res.status})`)
+  }
+  return res.json() // { region, incentives: [...] }
+}

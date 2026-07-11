@@ -10,7 +10,7 @@ import {
 import { parseBomFile, bomTemplateCsv } from './bomParser.js'
 import { generateEcoReport } from './pdfReport.js'
 import { analyzeBom, lastSource } from './analysis.js'
-import { extractBom, fetchNarrative } from './api.js'
+import { extractBom, fetchNarrative, fetchIncentives } from './api.js'
 
 // --- ecocompass palette (mirrors the CSS vars in theme.css) ----------------
 const T = {
@@ -890,6 +890,102 @@ function MaterialReviewPanel({ bom, review, onSetMaterial }) {
   )
 }
 
+// Regions the incentive finder can search. Australia leads (this is a UNSW build),
+// but every figure comes from a live web search scoped to the chosen region.
+const INCENTIVE_REGIONS = ['Australia', 'United States', 'United Kingdom', 'European Union', 'Canada', 'New Zealand', 'Singapore']
+
+const LEVEL_STYLE = {
+  federal: { bg: 'rgba(30,61,43,0.10)', fg: T.accent, label: 'Federal' },
+  state: { bg: 'rgba(168,122,60,0.14)', fg: T.warn, label: 'State' },
+  local: { bg: 'rgba(91,122,78,0.14)', fg: T.good, label: 'Local' },
+  other: { bg: T.cardAlt, fg: T.muted, label: 'Program' },
+}
+
+// A live-web-search section: Claude finds real government grants / rebates / tax
+// credits for the chosen region and product, each with a source link to verify.
+// Triggered on demand (it hits the web, so it's slower and costs a search).
+function IncentivesPanel({ productName, materials }) {
+  const [region, setRegion] = useState('Australia')
+  const [state, setState] = useState({ status: 'idle', items: [], error: '' }) // idle|loading|done|error
+
+  const run = () => {
+    setState({ status: 'loading', items: [], error: '' })
+    fetchIncentives({ productName, materials, region })
+      .then((res) => setState({ status: 'done', items: res.incentives || [], error: '' }))
+      .catch((err) => setState({ status: 'error', items: [], error: err.message || 'Lookup failed.' }))
+  }
+
+  const select = {
+    appearance: 'none', WebkitAppearance: 'none',
+    padding: '9px 30px 9px 12px', fontSize: 13, fontFamily: 'Nunito, sans-serif',
+    background: `${T.card} url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238A857A' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>") no-repeat right 10px center`,
+    color: T.ink, border: `1px solid ${T.line}`, borderRadius: 9, cursor: 'pointer', outline: 'none',
+  }
+
+  return (
+    <div className="no-print" style={{ marginTop: 30 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <Icon size={16} stroke={T.accent} sw={1.9} d={['M3 21h18', 'M5 21V10l7-5 7 5v11', 'M9 21v-6h6v6']} />
+        <span style={{ fontSize: 15, fontWeight: 600 }}>Government incentives that could help</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55, marginBottom: 14, maxWidth: 640 }}>
+        Building greener can pay back twice. ecocompass searches the live web for grants, rebates and tax credits in your region that reward lower-carbon materials, recycled content and repairable design — each with a source link so you can check it yourself.
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: state.status === 'idle' ? 0 : 18 }}>
+        <select value={region} onChange={(e) => setRegion(e.target.value)} aria-label="Region" style={select}>
+          {INCENTIVE_REGIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <button onClick={run} disabled={state.status === 'loading'} style={{ ...btnSolid, opacity: state.status === 'loading' ? 0.6 : 1 }}>
+          <Icon size={14} stroke={T.page} sw={2} d={['M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z', 'm21 21-4.35-4.35']} />
+          {state.status === 'loading' ? 'Searching the web…' : state.status === 'done' ? 'Search again' : 'Find incentives'}
+        </button>
+        {state.status === 'loading' && <span style={{ fontSize: 12, color: T.muted }}>This can take ~15 seconds — reading live sources.</span>}
+      </div>
+
+      {state.status === 'error' && (
+        <div style={{ background: 'rgba(176,87,110,0.08)', border: '1px solid rgba(176,87,110,0.34)', color: '#8A3F52', fontSize: 12.5, lineHeight: 1.55, borderRadius: 12, padding: '12px 15px' }}>
+          Couldn't fetch incentives — {state.error} This needs the backend running with web search and an API key; the analysis above is unaffected.
+        </div>
+      )}
+
+      {state.status === 'done' && state.items.length === 0 && (
+        <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 12, padding: '16px 18px', fontSize: 13, color: T.ink3 }}>
+          No matching programs surfaced for {region} right now. Try another region, or check your local sustainability / manufacturing agency directly.
+        </div>
+      )}
+
+      {state.status === 'done' && state.items.length > 0 && (
+        <div style={{ display: 'grid', gap: 10 }}>
+          {state.items.map((it, i) => {
+            const lvl = LEVEL_STYLE[it.level] || LEVEL_STYLE.other
+            return (
+              <div key={i} style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 12, padding: '14px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{it.name}</span>
+                  <span className="mono" style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: lvl.fg, background: lvl.bg, borderRadius: 6, padding: '2px 7px' }}>{lvl.label}</span>
+                  {it.provider && <span style={{ fontSize: 12, color: T.muted }}>{it.provider}</span>}
+                </div>
+                {it.summary && <div style={{ fontSize: 12.5, color: T.ink2, lineHeight: 1.55, marginTop: 6 }}>{it.summary}</div>}
+                {it.relevance && <div style={{ fontSize: 12, color: T.ink3, lineHeight: 1.5, marginTop: 5 }}><span style={{ color: T.accent, fontWeight: 600 }}>Why it fits: </span>{it.relevance}</div>}
+                {it.url && (
+                  <a href={it.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: T.accent, marginTop: 9, textDecoration: 'none' }}>
+                    View source
+                    <Icon size={12} stroke={T.accent} sw={2} d={['M7 17 17 7', 'M7 7h10v10']} />
+                  </a>
+                )}
+              </div>
+            )
+          })}
+          <div style={{ fontSize: 11, color: T.faint, lineHeight: 1.6, marginTop: 2 }}>
+            Gathered by AI from a live web search of {region} sources — treat as a starting point and confirm eligibility and current status at each program's official page before relying on it.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ResultsView({ setView, bom: initialBom, meta, warnings }) {
   // Editable copy of the parsed BOM. Rows flagged kgMissing get filled in via the
   // MissingMassPanel below, which updates a mass here and re-runs the analysis.
@@ -1118,6 +1214,11 @@ function ResultsView({ setView, bom: initialBom, meta, warnings }) {
           <div className="no-print" style={{ fontSize: 11.5, color: T.faint, marginTop: 18, lineHeight: 1.65 }}>
             Rankings recompute live from the priority slider. A swap is only offered when it clears the part's functional requirements — anything that fails is flagged with the specific reason, never silently dropped. The repairability score is a transparent point model (base 70 ± deltas for fastening, sourcing, failure risk, recycling and service life — see <span className="mono">scoring_rules.json</span>). Figures marked <em>estimated</em> in the dataset are indicative.
           </div>
+
+          <IncentivesPanel
+            productName={meta.productName}
+            materials={[...new Set(bomInput.map((r) => prettyMat(r.from)))].slice(0, 12).join(', ')}
+          />
         </>
       )}
     </div>
