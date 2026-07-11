@@ -18,6 +18,30 @@ sys.path.append(str(BACKEND_DIR / "main"))
 from parse import parse_csv  # noqa: E402
 from score import analyze_bom  # noqa: E402
 from ai import ai_configured, extract_bom, generate_narrative  # noqa: E402
+from main import library_summary, match_library  # noqa: E402  (data/reference-library pipeline)
+
+
+def _attach_library(result, bom):
+    """Enrich a swap analysis with reference-library recognition (backend/data).
+
+    Adds a per-line `library` block (known flags + matched reference detail) and a
+    `library` roll-up on the summary. Best-effort: any failure leaves the analysis
+    untouched so the reference library can never break scoring."""
+    try:
+        matched = match_library(
+            [{"component": b.get("component", ""), "material": b.get("from", "")} for b in bom]
+        )
+        for line, m in zip(result.get("lines", []), matched):
+            line["library"] = {
+                "componentKnown": m["component_known"],
+                "componentRef": m["component_ref"],
+                "materialKnown": m["material_known"],
+                "materialRef": m["material_ref"],
+            }
+        result.setdefault("summary", {})["library"] = library_summary(matched)
+    except Exception:  # noqa: BLE001 — reference library is additive, never fatal
+        pass
+    return result
 
 
 def _ai_unavailable(exc):
@@ -33,7 +57,10 @@ app = FastAPI(title="ecocompass API")
 # allow direct localhost calls too so the app works without the proxy.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -46,7 +73,7 @@ def read_root():
         "service": "ecocompass",
         "status": "ok",
         "ai": ai_configured(),
-        "endpoints": ["/upload-csv", "/analyze-bom", "/narrative", "/extract-bom"],
+        "endpoints": ["/upload-csv", "/analyze-bom", "/library-compare", "/narrative", "/extract-bom"],
     }
 
 
@@ -99,9 +126,29 @@ def analyze_bom_endpoint(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="Request must include a non-empty 'bom' array.")
     weights = payload.get("weights") or {"carbon": 0.6}
     try:
-        return analyze_bom(bom, weights)
+        return _attach_library(analyze_bom(bom, weights), bom)
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Unknown material in BOM: {e}")
+
+
+@app.post("/library-compare")
+def library_compare_endpoint(payload: dict = Body(...)):
+    """Match a bill of materials against the backend/data reference library.
+
+    Body: { "bom": [{ "component", "from"|"material" }, ...] }
+    Returns { "rows": [...matched entries...], "summary": {...} } — each row flags
+    whether the component/material is a known reference entry and, if so, the
+    reference detail (repairability, failure risk, service life, recycling ...).
+    """
+    bom = payload.get("bom")
+    if not isinstance(bom, list) or not bom:
+        raise HTTPException(status_code=400, detail="Request must include a non-empty 'bom' array.")
+    rows = [
+        {"component": b.get("component", ""), "material": b.get("material", b.get("from", ""))}
+        for b in bom
+    ]
+    matched = match_library(rows)
+    return {"rows": matched, "summary": library_summary(matched)}
 
 
 @app.post("/upload-csv")

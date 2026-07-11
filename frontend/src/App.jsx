@@ -337,6 +337,96 @@ function ProsCons({ line }) {
   )
 }
 
+// Reference-library detail for a component/material — repairability, failure
+// risk, service life and end-of-life notes sourced from backend/data (the
+// component_library / material_library CSVs). Only rendered when the backend
+// enriched this line (line.library); the offline engine leaves it undefined.
+
+// Maps a qualitative reference rating to the app's green/amber/red language.
+const RATING_TONE = {
+  high: T.good, medium: T.warn, low: T.bad,
+  good: T.good, moderate: T.warn, poor: T.bad,
+}
+function RefChip({ label, value, tone }) {
+  if (!value) return null
+  const color = tone || RATING_TONE[String(value).toLowerCase()] || T.ink3
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: T.page, border: `1px solid ${T.line}`, borderRadius: 7, padding: '3px 8px', fontSize: 11, color: T.ink2 }}>
+      <span className="mono" style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.06em', color: T.muted }}>{label}</span>
+      <span style={{ fontWeight: 600, color, textTransform: 'capitalize' }}>{value}</span>
+    </span>
+  )
+}
+
+function RefCard({ kind, matchedTo, known, chips, life, notes, footer }) {
+  return (
+    <div style={{ background: T.page, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 13px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: known ? 9 : 0 }}>
+        <span className="mono" style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.08em', color: T.muted }}>{kind}</span>
+        {known
+          ? <span className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: T.ink }}>{matchedTo}</span>
+          : <span style={{ fontSize: 11.5, color: T.faint }}>not in reference library</span>}
+      </div>
+      {known && (
+        <>
+          {chips.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 9 }}>{chips}</div>}
+          {life && <div style={{ fontSize: 11.5, color: T.ink3, marginBottom: notes ? 7 : 0 }}>Typical service life <strong style={{ color: T.ink2 }}>{life}</strong></div>}
+          {notes && <div style={{ fontSize: 12, color: T.ink2, lineHeight: 1.5 }}>{notes}</div>}
+          {footer}
+        </>
+      )}
+    </div>
+  )
+}
+
+function LibraryPanel({ library }) {
+  if (!library) return null
+  const c = library.componentRef
+  const m = library.materialRef
+  const yrs = (a, b) => (a != null && b != null ? `${a}–${b} yrs` : null)
+  return (
+    <div>
+      <div className="mono" style={{ fontSize: 10, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7 }}>
+        Reference library
+        <span style={{ textTransform: 'none', letterSpacing: 0, color: T.faint, fontFamily: 'Nunito, sans-serif', fontSize: 10.5 }}>· repairability &amp; circularity · backend/data</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <RefCard
+          kind="Component" known={library.componentKnown} matchedTo={c?.component_type}
+          chips={[
+            <RefChip key="fr" label="failure risk" value={c?.typical_failure_risk} tone={RATING_TONE[String(c?.typical_failure_risk).toLowerCase()] && (c?.typical_failure_risk === 'low' ? T.good : c?.typical_failure_risk === 'high' ? T.bad : T.warn)} />,
+            <RefChip key="ri" label="repair value" value={c?.repair_importance} tone={c?.repair_importance === 'high' ? T.good : c?.repair_importance === 'low' ? T.muted : T.warn} />,
+          ].filter(Boolean)}
+          life={yrs(c?.expected_service_life_years_min, c?.expected_service_life_years_max)}
+          notes={c?.repairability_notes}
+          footer={c?.suggested_alternative && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 9, fontSize: 11.5, color: T.ink3, lineHeight: 1.45 }}>
+              <Icon size={12} stroke={T.accent} sw={2.2} d={['M12 2 2 7l10 5 10-5-10-5z', 'm2 17 10 5 10-5', 'm2 12 10 5 10-5']} style={{ flexShrink: 0, marginTop: 2 }} />
+              <span><span style={{ color: T.accent, fontWeight: 600 }}>Design tip · </span>{c.suggested_alternative}</span>
+            </div>
+          )}
+        />
+        <RefCard
+          kind="Material" known={library.materialKnown} matchedTo={m?.material_name}
+          chips={[
+            <RefChip key="rec" label="recycling" value={m?.recycling_potential} />,
+            <RefChip key="cat" label="class" value={m?.material_category} tone={T.ink3} />,
+            m?.durability_score != null && <RefChip key="dur" label="durability" value={`${m.durability_score}/10`} tone={m.durability_score >= 7 ? T.good : m.durability_score >= 4 ? T.warn : T.bad} />,
+          ].filter(Boolean)}
+          life={yrs(m?.estimated_life_years_min, m?.estimated_life_years_max)}
+          notes={m?.end_of_life_notes}
+          footer={m?.risk_notes && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 9, fontSize: 11.5, color: T.ink3, lineHeight: 1.45 }}>
+              <Icon size={12} stroke={T.warn} sw={2.2} d={['M12 9v4', 'M12 17h.01', 'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z']} style={{ flexShrink: 0, marginTop: 2 }} />
+              <span>{m.risk_notes}</span>
+            </div>
+          )}
+        />
+      </div>
+    </div>
+  )
+}
+
 // One expandable results row: the scannable summary always shows; the detail
 // (radar + candidate table + reasons) drops down when opened.
 function LineRow({ line, open, onToggle }) {
@@ -396,6 +486,7 @@ function LineRow({ line, open, onToggle }) {
                   </div>
                   <CandidatesTable line={line} />
                 </div>
+                {line.library && <LibraryPanel library={line.library} />}
               </div>
             </div>
           </td>
@@ -597,6 +688,13 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
                 <span style={{ width: 5, height: 5, borderRadius: 99, background: source === 'backend' ? T.good : T.faint }} />
                 {source === 'backend' ? 'via API' : 'offline engine'}
               </span>
+              {summary.library && (
+                <span className="no-print mono" title="Components / materials recognised in the backend/data reference library (repairability & circularity)"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: T.ink3, background: T.cardAlt, border: `1px solid ${T.line}`, borderRadius: 99, padding: '3px 10px' }}>
+                  <Icon size={11} stroke={T.accent} sw={2} d={['M12 2 2 7l10 5 10-5-10-5z', 'm2 17 10 5 10-5', 'm2 12 10 5 10-5']} />
+                  library {summary.library.componentsKnown}/{summary.library.total} comp · {summary.library.materialsKnown}/{summary.library.total} mat
+                </span>
+              )}
             </div>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: T.card, border: `1px solid ${T.line}`, borderRadius: 99, padding: '5px 13px' }}>
               <span className="mono" style={{ fontSize: 10.5, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Eco score</span>
