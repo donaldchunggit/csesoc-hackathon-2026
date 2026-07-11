@@ -53,6 +53,47 @@ button { font-family: 'Nunito', sans-serif; }
 ::-webkit-scrollbar-thumb { background: #DAD4C6; border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* --- shared motion + interaction utilities --------------------------------
+   Kept here (not inline) so every surface animates identically and React
+   doesn't re-create the same style objects on each render. */
+@keyframes eco-spin { to { transform: rotate(360deg); } }
+@keyframes eco-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes eco-scan-line {
+  0%   { top: 6%; opacity: 0; }
+  15%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { top: 94%; opacity: 0; }
+}
+@keyframes eco-shimmer { 100% { background-position: 200% 0; } }
+
+.eco-spin { animation: eco-spin 0.8s linear infinite; }
+.eco-fade-up { animation: eco-fade-up 0.28s ease-out both; }
+.eco-scan-line { animation: eco-scan-line 2.2s ease-in-out infinite; }
+
+/* Buttons and interactive cards share one transition + press feel. */
+.eco-btn { transition: background .16s ease, border-color .16s ease, color .16s ease, box-shadow .16s ease, transform .06s ease; }
+.eco-btn:hover { box-shadow: 0 1px 0 rgba(35, 33, 28, 0.04), 0 3px 10px rgba(35, 33, 28, 0.06); }
+.eco-btn:active { transform: translateY(1px); }
+.eco-btn:disabled { cursor: default; box-shadow: none; transform: none; }
+
+.eco-card { transition: border-color .16s ease, box-shadow .18s ease, transform .12s ease; }
+.eco-lift:hover { border-color: #D8D0BF; box-shadow: 0 6px 20px rgba(35, 33, 28, 0.07); transform: translateY(-1px); }
+
+/* Skeleton shimmer for loading placeholders. */
+.eco-skeleton {
+  background: linear-gradient(90deg, #EFEADF 25%, #F6F2E9 37%, #EFEADF 63%);
+  background-size: 200% 100%;
+  animation: eco-shimmer 1.3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eco-spin, .eco-fade-up, .eco-skeleton, .eco-scan-line { animation: none; }
+  .eco-btn, .eco-card, .eco-lift { transition: none; }
+}
+
 @media print {
   .no-print { display: none !important; }
   body { background: #fff !important; }

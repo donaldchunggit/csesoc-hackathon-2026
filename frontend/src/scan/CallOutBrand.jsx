@@ -46,7 +46,7 @@ export default function CallOutBrand({ scan }) {
 
   if (!open) {
     return (
-      <button onClick={openPanel} style={{ ...btnGhost, borderColor: T.line }}>
+      <button onClick={openPanel} className="eco-btn" style={{ ...btnGhost, borderColor: T.line }}>
         <Icon d={ICONS.megaphone} size={15} stroke={T.ink} sw={1.9} /> Call out this brand
       </button>
     )
@@ -69,14 +69,14 @@ export default function CallOutBrand({ scan }) {
         }}
       />
       <div style={{ display: 'flex', gap: 9, marginTop: 12, flexWrap: 'wrap' }}>
-        <button onClick={copy} style={{ ...btnGhost, background: copied ? 'rgba(91,122,78,0.14)' : T.card, borderColor: copied ? T.good : T.line, color: copied ? T.good : T.ink }}>
+        <button onClick={copy} className="eco-btn" style={{ ...btnGhost, background: copied ? 'rgba(91,122,78,0.14)' : T.card, borderColor: copied ? T.good : T.line, color: copied ? T.good : T.ink }}>
           <Icon d={copied ? ICONS.check : ICONS.copy} size={14} stroke={copied ? T.good : T.ink} sw={2} />
           {copied ? 'Copied' : 'Copy message'}
         </button>
-        <a href={mailto} style={{ ...btnGhost, textDecoration: 'none' }}>
+        <a href={mailto} className="eco-btn" style={{ ...btnGhost, textDecoration: 'none' }}>
           <Icon d={ICONS.mail} size={14} stroke={T.ink} sw={1.9} /> Open in mail
         </a>
-        <button onClick={() => setOpen(false)} style={{ ...btnGhost, border: 'none', background: 'transparent', color: T.muted }}>Cancel</button>
+        <button onClick={() => setOpen(false)} className="eco-btn" style={{ ...btnGhost, border: 'none', background: 'transparent', color: T.muted }}>Cancel</button>
       </div>
     </div>
   )

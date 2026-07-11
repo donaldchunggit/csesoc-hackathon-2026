@@ -83,7 +83,7 @@ export default function ContributePrompt({ gtin, productName }) {
         <input value={materials} onChange={(e) => setMaterials(e.target.value)} placeholder="Main materials, if you know them (e.g. steel, ABS plastic)" style={input} />
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Anything else — repairability, spare parts, etc." style={{ ...input, resize: 'vertical' }} />
 
-        <label style={{ ...btnGhost, alignSelf: 'flex-start', cursor: 'pointer' }}>
+        <label className="eco-btn" style={{ ...btnGhost, alignSelf: 'flex-start', cursor: 'pointer' }}>
           <Icon d={ICONS.upload} size={14} stroke={T.ink} sw={1.9} />
           {photo ? 'Change photo' : 'Add a photo'}
           <input type="file" accept="image/*" onChange={onPhoto} style={{ display: 'none' }} />
@@ -99,7 +99,7 @@ export default function ContributePrompt({ gtin, productName }) {
       {error && <div style={{ marginTop: 12, fontSize: 12.5, color: '#8A3F52' }}>{error}</div>}
 
       <div style={{ marginTop: 16 }}>
-        <button onClick={submit} disabled={status === 'saving'} style={{ ...btnAccent, opacity: status === 'saving' ? 0.6 : 1 }}>
+        <button onClick={submit} disabled={status === 'saving'} className="eco-btn" style={{ ...btnAccent, opacity: status === 'saving' ? 0.6 : 1 }}>
           {status === 'saving' ? 'Submitting…' : 'Submit contribution'}
         </button>
       </div>

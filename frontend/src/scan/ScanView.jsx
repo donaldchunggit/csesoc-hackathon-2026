@@ -68,7 +68,7 @@ export default function ScanView() {
             <div style={{ flex: 1, height: 1, background: T.line }} />
           </div>
 
-          <label style={{ ...btnGhost, width: '100%', boxSizing: 'border-box', padding: '13px', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
+          <label className="eco-btn eco-lift eco-card" style={{ ...btnGhost, width: '100%', boxSizing: 'border-box', padding: '13px', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
             <Icon d={ICONS.camera} size={16} stroke={T.ink} sw={1.9} /> Upload a product photo
             <input ref={photoInputRef} type="file" accept="image/*" onChange={runPhoto} disabled={busy} style={{ display: 'none' }} />
           </label>
@@ -76,8 +76,10 @@ export default function ScanView() {
       )}
 
       {busy && (
-        <div style={{ textAlign: 'center', padding: '28px 0', color: T.muted, fontSize: 13.5 }}>
-          <Icon d={ICONS.spark} size={20} stroke={T.accent} sw={2} /> <div style={{ marginTop: 8 }}>{busyLabel}</div>
+        <div style={{ textAlign: 'center', padding: '34px 0', color: T.muted, fontSize: 13.5 }}>
+          <div className="eco-spin" style={{ width: 30, height: 30, margin: '0 auto', borderRadius: '50%', border: `3px solid ${T.line}`, borderTopColor: T.accent }} />
+          <div style={{ marginTop: 12 }}>{busyLabel}</div>
+          <div style={{ marginTop: 4, fontSize: 11.5, color: T.faint }}>Verified lookup is instant; the AI estimate takes a few seconds.</div>
         </div>
       )}
 
@@ -88,7 +90,7 @@ export default function ScanView() {
       )}
 
       {scan && (
-        <div>
+        <div className="eco-fade-up">
           <ScanResultCard scan={scan} />
 
           {scan.needs_contribution && (
@@ -97,7 +99,7 @@ export default function ScanView() {
             </div>
           )}
 
-          <button onClick={reset} style={{ ...btnGhost, marginTop: 22 }}>
+          <button onClick={reset} className="eco-btn" style={{ ...btnGhost, marginTop: 22 }}>
             <Icon d={ICONS.barcode} size={14} stroke={T.ink} sw={1.9} /> Scan another product
           </button>
         </div>

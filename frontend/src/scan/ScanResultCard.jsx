@@ -51,7 +51,7 @@ function GradeTile({ title, score, band, provenanceKind, confidence, caption }) 
   const b = bandStyle(band)
   const has = score != null
   return (
-    <div style={{ flex: 1, minWidth: 200, background: T.card, border: `1px solid ${T.line}`, borderRadius: 16, padding: 18 }}>
+    <div className="eco-card eco-lift" style={{ flex: 1, minWidth: 200, background: T.card, border: `1px solid ${T.line}`, borderRadius: 16, padding: 18 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{title}</span>
         <ProvenanceBadge kind={provenanceKind} confidence={confidence} />
@@ -157,7 +157,7 @@ export default function ScanResultCard({ scan }) {
 
       {/* One better-scoring alternative. */}
       {alt && (
-        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(47,107,67,0.06)', border: '1px solid rgba(47,107,67,0.22)', borderRadius: 14, padding: '14px 16px' }}>
+        <div className="eco-card eco-lift" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(47,107,67,0.06)', border: '1px solid rgba(47,107,67,0.22)', borderRadius: 14, padding: '14px 16px' }}>
           <div style={{ width: 46, height: 46, flexShrink: 0, borderRadius: '50%', border: `4px solid ${bandStyle(alt.band).ring}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 800, color: bandStyle(alt.band).fg }}>
             {alt.score}
           </div>

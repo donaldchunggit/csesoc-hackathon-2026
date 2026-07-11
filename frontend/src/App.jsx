@@ -1,17 +1,16 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react'
-import {
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
-  ResponsiveContainer, Legend, Tooltip,
-} from 'recharts'
+import React, { useMemo, useState, useEffect, useRef, Suspense, lazy } from 'react'
 import {
   DATA, BOM, CATEGORIES, CAT_COLORS,
   mat, co2eColor, recycColor, fmtCost, datasetCsv,
 } from './materials.js'
 import { parseBomFile, bomTemplateCsv } from './bomParser.js'
-import { generateEcoReport } from './pdfReport.js'
 import { analyzeBom, lastSource } from './analysis.js'
 import { extractBom, fetchNarrative, fetchIncentives } from './api.js'
-import ScanView from './scan/ScanView.jsx'
+
+// Lazy chunks — keep recharts (radar) and the scan page out of the initial
+// bundle so first paint is light; each loads only when actually shown.
+const RadarPanel = lazy(() => import('./RadarCell.jsx'))
+const ScanView = lazy(() => import('./scan/ScanView.jsx'))
 
 // --- ecocompass palette (mirrors the CSS vars in theme.css) ----------------
 const T = {
@@ -236,25 +235,8 @@ function ScaledImpact({ co2eSavedPerUnit, annualVolume, setAnnualVolume }) {
   )
 }
 
-// Radar comparing the original material vs the top suggestion across the four
-// normalised axes (higher = better on every axis).
-function RadarPanel({ line }) {
-  return (
-    <div style={{ width: '100%', height: 250, minWidth: 240 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <RadarChart data={line.radar} outerRadius="70%">
-          <PolarGrid stroke={T.line} />
-          <PolarAngleAxis dataKey="axis" tick={{ fill: T.ink3, fontSize: 11 }} />
-          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-          <Radar name={line.from} dataKey="original" stroke={T.muted} fill={T.muted} fillOpacity={0.16} strokeWidth={1.5} />
-          {line.swapped && <Radar name={line.to} dataKey="suggestion" stroke={T.accent} fill={T.accent} fillOpacity={0.24} strokeWidth={1.6} />}
-          <Legend wrapperStyle={{ fontSize: 11, fontFamily: "'Geist Mono', monospace" }} />
-          <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: `1px solid ${T.line}`, background: T.card }} />
-        </RadarChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
+// RadarPanel (recharts) is lazy-loaded — see the `lazy(() => import('./RadarCell.jsx'))`
+// declaration near the top. Usages below wrap it in <Suspense>.
 
 // The per-component "results table": the top few viable candidates the engine
 // ranked, plus the most tempting rejected ones with the reason they were cut.
@@ -518,7 +500,9 @@ function LineRow({ line, open, onToggle }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 340px) 1fr', gap: 22, padding: '8px 20px 22px', alignItems: 'start' }}>
               <div>
                 <div className="mono" style={{ fontSize: 10, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Property profile</div>
-                <RadarPanel line={line} />
+                <Suspense fallback={<div className="eco-skeleton" style={{ width: '100%', height: 250, minWidth: 240, borderRadius: 12 }} />}>
+                  <RadarPanel line={line} />
+                </Suspense>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, paddingTop: 6 }}>
                 <div style={{ fontSize: 12.5, color: T.ink2, lineHeight: 1.55 }}>{line.statusReason}</div>
@@ -1092,8 +1076,11 @@ function ResultsView({ setView, bom: initialBom, meta, warnings }) {
     : ''
 
   // Assemble the payload the PDF generator renders from the live analysis.
-  const exportPdf = () => {
+  // jsPDF is dynamically imported so it stays out of the initial bundle — it's
+  // only fetched the first time someone exports.
+  const exportPdf = async () => {
     if (!analysis) return
+    const { generateEcoReport } = await import('./pdfReport.js')
     generateEcoReport({
       meta,
       componentCount: bomInput.length,
@@ -1587,7 +1574,11 @@ export default function App() {
 
       {view === 'upload' && <UploadView fileName={fileName} onFile={analyzeFile} onSample={analyzeSample} onLoadSample={loadSample} busy={busy} busyLabel={busyLabel} error={uploadError} />}
       {view === 'results' && <ResultsView setView={setView} bom={bom} meta={meta} warnings={warnings} />}
-      {view === 'scan' && <ScanView />}
+      {view === 'scan' && (
+        <Suspense fallback={<div style={{ textAlign: 'center', padding: '120px 0', color: T.muted, fontSize: 13 }}>Loading scanner…</div>}>
+          <ScanView />
+        </Suspense>
+      )}
       {view === 'library' && (
         <LibraryView
           query={query} setQuery={setQuery}
