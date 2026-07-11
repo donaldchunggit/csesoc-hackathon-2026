@@ -104,9 +104,10 @@ function UploadView({ fileName, onFile, onSample, onLoadSample, busy, busyLabel,
   const chip = { background: T.card, color: T.ink3, border: `1px solid ${T.line}`, fontSize: 12.5, fontWeight: 500, padding: '6px 12px', borderRadius: 8, cursor: busy ? 'default' : 'pointer', fontFamily: 'Nunito, sans-serif' }
   return (
     <div style={{ maxWidth: 660, margin: '0 auto', padding: '104px 32px 88px' }}>
-      <div className="mono" style={eyebrow}>Sustainable swap engine</div>
-      <h1 style={{ fontSize: 44, fontWeight: 600, letterSpacing: '-0.035em', margin: '18px 0 18px', lineHeight: 1.08 }}>Know your material impact, precisely.</h1>
-      <p style={{ fontSize: 17, color: T.ink3, lineHeight: 1.6, margin: '0 0 40px', maxWidth: 520 }}>Drop in your bill of materials and ecocompass maps every component to a lower-carbon alternative, with updated cost, embodied carbon and recyclability worked out for you.</p>
+      <div className="mono" style={eyebrow}>Carbon + repairability engine</div>
+      <h1 style={{ fontSize: 44, fontWeight: 600, letterSpacing: '-0.035em', margin: '18px 0 18px', lineHeight: 1.08 }}>Score any build on carbon and repairability.</h1>
+      <p style={{ fontSize: 17, color: T.ink3, lineHeight: 1.6, margin: '0 0 24px', maxWidth: 540 }}>Drop in a bill of materials. ecocompass finds lower-carbon material swaps — and refuses the ones it can't justify, telling you why — then scores how repairable and long-lived the design is, with concrete fixes to raise it.</p>
+      <p style={{ fontSize: 13, color: T.muted, lineHeight: 1.6, margin: '0 0 34px', maxWidth: 540 }}>Every figure is a transparent, sourced estimate — each material links to its primary source and the reason behind a rejected swap, so you can check our working, not just trust a number.</p>
 
       <label style={{ display: 'block', background: T.card, border: `1px solid ${T.line}`, borderRadius: 14, padding: '44px 30px', cursor: busy ? 'default' : 'pointer', textAlign: 'center', transition: 'border-color .18s, background .18s' }}
         onMouseOver={(e) => { if (busy) return; e.currentTarget.style.borderColor = '#C9C1AE'; e.currentTarget.style.background = '#FEFDFB' }}
@@ -379,13 +380,35 @@ function RefCard({ kind, matchedTo, known, chips, life, notes, footer }) {
   )
 }
 
-function LibraryPanel({ library }) {
+// A single longevity-score factor (+/- points with its reason).
+function FactorRow({ f }) {
+  const up = f.delta > 0
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, padding: '3px 0' }}>
+      <span className="mono" style={{ flexShrink: 0, width: 34, textAlign: 'right', fontWeight: 700, color: up ? T.good : f.delta < 0 ? T.bad : T.muted }}>{up ? '+' : ''}{f.delta}</span>
+      <span style={{ color: T.ink2, textTransform: 'capitalize' }}>{f.label}</span>
+    </div>
+  )
+}
+
+function LibraryPanel({ library, repair }) {
   if (!library) return null
   const c = library.componentRef
   const m = library.materialRef
   const yrs = (a, b) => (a != null && b != null ? `${a}–${b} yrs` : null)
   return (
     <div>
+      {repair && (
+        <div style={{ background: T.page, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 13px', marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+            <span className="mono" style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.08em', color: T.muted }}>Longevity score · this part</span>
+            <span style={{ fontSize: 17, fontWeight: 700, color: scoreColor(repair.score) }}>{repair.score}<span className="mono" style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>/100</span></span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 18 }}>
+            {repair.factors.map((f, i) => <FactorRow key={i} f={f} />)}
+          </div>
+        </div>
+      )}
       <div className="mono" style={{ fontSize: 10, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7 }}>
         Reference library
         <span style={{ textTransform: 'none', letterSpacing: 0, color: T.faint, fontFamily: 'Nunito, sans-serif', fontSize: 10.5 }}>· repairability &amp; circularity · backend/data</span>
@@ -486,7 +509,7 @@ function LineRow({ line, open, onToggle }) {
                   </div>
                   <CandidatesTable line={line} />
                 </div>
-                {line.library && <LibraryPanel library={line.library} />}
+                {line.library && <LibraryPanel library={line.library} repair={line.repair} />}
               </div>
             </div>
           </td>
@@ -547,6 +570,72 @@ function AiSummary({ narrative, onRegenerate }) {
       ) : (
         <div style={{ fontSize: 13.5, color: T.ink2, lineHeight: 1.65 }}>{narrative.text}</div>
       )}
+    </div>
+  )
+}
+
+// Green/amber/red for a 0-100 score.
+const scoreColor = (v) => (v >= 75 ? T.good : v >= 50 ? T.warn : T.bad)
+
+// The headline dual-lens scorecard: one blended score built from CARBON (the
+// swap engine) and LONGEVITY (the repairability engine, backend/data). This is
+// the reframe — the product scores a build on both, not just embodied carbon.
+function ScoreBanner({ summary }) {
+  const rep = summary.repairability
+  const overall = summary.overall
+  const Tile = ({ label, score, grade, sub, big }) => (
+    <div style={{ flex: big ? 1.25 : 1, minWidth: 150, background: big ? T.accent : T.card, color: big ? T.page : T.ink, border: `1px solid ${big ? T.accent : T.line}`, borderRadius: 14, padding: '16px 18px' }}>
+      <div className="mono" style={{ fontSize: 10, color: big ? 'rgba(244,241,234,0.72)' : T.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
+        <span style={{ fontSize: big ? 36 : 27, fontWeight: 700, letterSpacing: '-0.03em', color: big ? T.page : scoreColor(score) }}>{score}</span>
+        <span className="mono" style={{ fontSize: 13, fontWeight: 600, color: big ? 'rgba(244,241,234,0.9)' : T.muted }}>{grade}</span>
+      </div>
+      {sub && <div style={{ fontSize: 11.5, color: big ? 'rgba(244,241,234,0.8)' : T.muted, marginTop: 5, lineHeight: 1.4 }}>{sub}</div>}
+    </div>
+  )
+  return (
+    <div style={{ display: 'flex', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+      {overall && <Tile big label="Overall eco score" score={overall.score} grade={overall.grade} sub="carbon impact + design longevity, blended" />}
+      <Tile label="Carbon impact" score={summary.ecoScore} grade={summary.ecoGrade} sub={`${summary.co2ePct}% embodied CO₂e cut vs baseline`} />
+      {rep && <Tile label="Repairability" score={rep.score} grade={rep.grade} sub={rep.label} />}
+    </div>
+  )
+}
+
+// Actionable design fixes ranked by the point gain each unlocks — the output
+// that turns a score into advice. Sourced from scoring_rules.json deltas.
+const FIX_ICON = {
+  fastening: ['M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z'],
+  sourcing: ['M20 7h-9', 'M14 17H5', 'M17 3l3 3-3 3', 'M7 21l-3-3 3-3'],
+  design: ['M12 2 2 7l10 5 10-5-10-5z', 'm2 17 10 5 10-5', 'm2 12 10 5 10-5'],
+  material: ['M3 6h18', 'M3 12h18', 'M3 18h18'],
+}
+function DesignFixes({ recommendations }) {
+  if (!recommendations || !recommendations.length) return null
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 14, padding: '18px 20px', marginBottom: 26 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <Icon size={15} stroke={T.accent} sw={1.9} d={['M12 20h9', 'M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z']} />
+        <span style={{ fontSize: 13.5, fontWeight: 600 }}>Design for longevity</span>
+        <span className="mono" style={{ fontSize: 9.5, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em', border: `1px solid ${T.line}`, borderRadius: 99, padding: '2px 7px' }}>{recommendations.length} fixes</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55, marginBottom: 14 }}>
+        Concrete changes that raise the repairability score, ranked by the points each recovers.
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {recommendations.map((f, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, background: T.page, border: `1px solid ${T.line}`, borderRadius: 10, padding: '11px 13px' }}>
+            <Icon size={15} stroke={T.accent} sw={1.9} d={FIX_ICON[f.kind] || FIX_ICON.design} style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: T.ink }}>{f.component}</span>
+              <span style={{ fontSize: 12.5, color: T.ink2 }}> · {f.action}</span>
+            </div>
+            {f.gain != null && (
+              <span className="mono" style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: T.good, background: 'rgba(91,122,78,0.12)', border: '1px solid rgba(91,122,78,0.34)', borderRadius: 7, padding: '3px 9px' }}>+{f.gain} pts</span>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -624,6 +713,10 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
       dateStr: new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }),
       narrative: narrative.text || '',
       ecoScore: summary.ecoScore, ecoGrade: summary.ecoGrade, headline,
+      overallScore: summary.overall?.score, overallGrade: summary.overall?.grade,
+      repairScore: summary.repairability?.score, repairGrade: summary.repairability?.grade,
+      repairLabel: summary.repairability?.label,
+      fixes: summary.repairability?.recommendations || [],
       co2ePct: summary.co2ePct, costDelta: signedMoney(summary.costDelta), costUp: summary.costUp, recycPts: summary.recycPts,
       costFrom: summary.costFrom, costTo: summary.costTo,
       co2eFrom: summary.co2eFrom, co2eTo: summary.co2eTo,
@@ -679,6 +772,8 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
         <div style={{ padding: '80px 0', textAlign: 'center', color: T.muted, fontSize: 14 }}>Analyzing bill of materials…</div>
       ) : (
         <>
+          <ScoreBanner summary={summary} />
+
           {/* Summary dashboard */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '4px 0 14px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -696,11 +791,6 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
                 </span>
               )}
             </div>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: T.card, border: `1px solid ${T.line}`, borderRadius: 99, padding: '5px 13px' }}>
-              <span className="mono" style={{ fontSize: 10.5, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Eco score</span>
-              <span style={{ fontSize: 15, fontWeight: 700, color: summary.ecoScore >= 75 ? T.good : summary.ecoScore >= 50 ? T.warn : T.bad }}>{summary.ecoScore}</span>
-              <span className="mono" style={{ fontSize: 11, color: T.muted }}>{summary.ecoGrade}</span>
-            </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 18 }}>
             <StatCard label="CO₂e saved / unit" value={`${summary.co2eSaved.toFixed(1)} kg`} sub={`−${summary.co2ePct}% vs baseline spec`} color={T.accent} />
@@ -710,6 +800,8 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
           </div>
 
           <ScaledImpact co2eSavedPerUnit={summary.co2eSaved} annualVolume={annualVolume} setAnnualVolume={setAnnualVolume} />
+
+          {summary.repairability && <DesignFixes recommendations={summary.repairability.recommendations} />}
 
           <AiSummary narrative={narrative} onRegenerate={() => runNarrative(carbonWeight)} />
 
@@ -740,7 +832,7 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
           </div>
 
           <div className="no-print" style={{ fontSize: 11.5, color: T.faint, marginTop: 18, lineHeight: 1.65 }}>
-            Rankings recompute live from the priority slider. A swap is only offered when it clears the part's functional requirements — anything that fails is flagged with the specific reason, never silently dropped. Figures marked <em>estimated</em> in the dataset are indicative.
+            Rankings recompute live from the priority slider. A swap is only offered when it clears the part's functional requirements — anything that fails is flagged with the specific reason, never silently dropped. The repairability score is a transparent point model (base 70 ± deltas for fastening, sourcing, failure risk, recycling and service life — see <span className="mono">scoring_rules.json</span>). Figures marked <em>estimated</em> in the dataset are indicative.
           </div>
         </>
       )}

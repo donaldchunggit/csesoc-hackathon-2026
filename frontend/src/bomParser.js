@@ -45,6 +45,9 @@ const COL_ALIASES = {
   material: ['material', 'from', 'frommaterial', 'current', 'currentmaterial', 'spec', 'composition', 'substance', 'mat'],
   kg: ['kg', 'mass', 'masskg', 'weight', 'weightkg', 'quantitykg', 'qtykg', 'massperunit', 'perunitkg'],
   to: ['to', 'swap', 'target', 'tomaterial', 'alternative', 'recommended'],
+  // Drive the repairability/longevity score (see backend/data/scoring_rules.json).
+  fastening: ['fastening', 'fasteningtype', 'attachment', 'joining', 'joiningmethod', 'fixing', 'assemblymethod'],
+  sourcing: ['sourcing', 'sourcingtype', 'supply', 'availability', 'supplier', 'source', 'procurement'],
 }
 
 // Common names people write for each library material.
@@ -197,7 +200,12 @@ export function parseBomCsv(text, fileName) {
     let to = idx.to !== undefined ? matchMaterial(cells[idx.to]) : null
     if (!to) to = recommendSwap(from)
 
-    rows.push({ component, from, to, kg: Math.round(kg * 1000) / 1000 })
+    // Fastening / sourcing feed the repairability score (kept as free text; the
+    // backend normalises them against scoring_rules.json).
+    const fastening = (idx.fastening !== undefined && cells[idx.fastening]?.trim()) || ''
+    const sourcing = (idx.sourcing !== undefined && cells[idx.sourcing]?.trim()) || ''
+
+    rows.push({ component, from, to, kg: Math.round(kg * 1000) / 1000, fastening, sourcing })
   })
 
   if (!rows.length && !warnings.length) {

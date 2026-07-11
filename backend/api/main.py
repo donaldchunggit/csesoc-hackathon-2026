@@ -18,19 +18,36 @@ sys.path.append(str(BACKEND_DIR / "main"))
 from parse import parse_csv  # noqa: E402
 from score import analyze_bom  # noqa: E402
 from ai import ai_configured, extract_bom, generate_narrative  # noqa: E402
-from main import library_summary, match_library  # noqa: E402  (data/reference-library pipeline)
+from main import library_summary, match_library, score_repairability  # noqa: E402  (data/reference-library pipeline)
+
+
+def _overall_grade(score):
+    """A/B/C/D/F for the blended score (matches the swap engine's eco bands)."""
+    return "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 45 else "F"
 
 
 def _attach_library(result, bom):
-    """Enrich a swap analysis with reference-library recognition (backend/data).
+    """Enrich a swap analysis with the design-longevity dimension (backend/data).
 
-    Adds a per-line `library` block (known flags + matched reference detail) and a
-    `library` roll-up on the summary. Best-effort: any failure leaves the analysis
-    untouched so the reference library can never break scoring."""
+    Adds, per line, the matched reference detail plus that part's repairability
+    score/factors/fixes; on the summary, a reference-library roll-up, the
+    repairability score + ranked design fixes, and a blended `overall` score that
+    combines carbon (the swap engine) with longevity. Best-effort: any failure
+    leaves the swap analysis untouched so this can never break scoring."""
     try:
-        matched = match_library(
-            [{"component": b.get("component", ""), "material": b.get("from", "")} for b in bom]
-        )
+        rows = [
+            {
+                "component": b.get("component", ""),
+                "material": b.get("from", ""),
+                "fastening": b.get("fastening", ""),
+                "sourcing": b.get("sourcing", ""),
+            }
+            for b in bom
+        ]
+        matched = match_library(rows)
+        repair = score_repairability(rows)
+        repair_by_component = {l["component"]: l for l in repair["lines"]}
+
         for line, m in zip(result.get("lines", []), matched):
             line["library"] = {
                 "componentKnown": m["component_known"],
@@ -38,7 +55,20 @@ def _attach_library(result, bom):
                 "materialKnown": m["material_known"],
                 "materialRef": m["material_ref"],
             }
-        result.setdefault("summary", {})["library"] = library_summary(matched)
+            rl = repair_by_component.get(line.get("component"))
+            if rl:
+                line["repair"] = {"score": rl["score"], "factors": rl["factors"], "fixes": rl["fixes"]}
+
+        summary = result.setdefault("summary", {})
+        summary["library"] = library_summary(matched)
+        summary["repairability"] = {
+            "score": repair["score"], "grade": repair["grade"], "label": repair["label"],
+            "recommendations": repair["recommendations"],
+        }
+        # Blend carbon (eco) and longevity (repairability) into one headline score.
+        eco = summary.get("ecoScore", repair["score"])
+        overall = round(0.5 * eco + 0.5 * repair["score"])
+        summary["overall"] = {"score": overall, "grade": _overall_grade(overall)}
     except Exception:  # noqa: BLE001 — reference library is additive, never fatal
         pass
     return result

@@ -100,7 +100,7 @@ class Report {
     d.line(M, fy, PAGE_W - M, fy)
     d.setFont('helvetica', 'normal').setFontSize(7.5)
     d.setTextColor(C.faint[0], C.faint[1], C.faint[2])
-    d.text('ecocompass · sustainable swap engine', M, fy + 13)
+    d.text('ecocompass · carbon + repairability engine', M, fy + 13)
     d.text(`Page ${this.page}`, PAGE_W - M, fy + 13, { align: 'right' })
   }
 
@@ -137,7 +137,7 @@ function header(r, data) {
   d.text('ecocompass', M + 26, r.y + 14)
 
   r.font('normal', 8.5).set(C.muted)
-  d.text('SUSTAINABLE SWAP REPORT', PAGE_W - M, r.y + 7, { align: 'right' })
+  d.text('CARBON + REPAIRABILITY REPORT', PAGE_W - M, r.y + 7, { align: 'right' })
   d.text(data.dateStr, PAGE_W - M, r.y + 18, { align: 'right' })
   r.y += 34
 
@@ -160,7 +160,11 @@ function ecoScoreBlock(r, data) {
   const boxH = 118
   r.need(boxH + 10)
   const top = r.y
-  const scoreColor = data.ecoScore >= 75 ? C.good : data.ecoScore >= 50 ? C.warn : C.bad
+  // Lead with the blended overall score when available, else the carbon score.
+  const headScore = data.overallScore ?? data.ecoScore
+  const headGrade = data.overallGrade ?? data.ecoGrade
+  const headLabel = data.overallScore != null ? 'OVERALL ECO SCORE' : 'ECO SCORE · THIS BUILD'
+  const scoreColor = headScore >= 75 ? C.good : headScore >= 50 ? C.warn : C.bad
 
   // Panel background.
   r.fill(C.card).stroke(C.line).doc.setLineWidth(0.8)
@@ -171,17 +175,19 @@ function ecoScoreBlock(r, data) {
   r.fill(C.cardAlt).doc.roundedRect(M + 16, top + 16, tileW, boxH - 32, 8, 8, 'F')
   const cx = M + 16 + tileW / 2
   r.font('normal', 7.5).set(C.muted)
-  d.text('ECO SCORE · THIS BUILD', cx, top + 34, { align: 'center' })
+  d.text(headLabel, cx, top + 34, { align: 'center' })
   r.font('bold', 40).set(scoreColor)
-  d.text(String(data.ecoScore), cx, top + 78, { align: 'center' })
+  d.text(String(headScore), cx, top + 78, { align: 'center' })
   r.font('bold', 10).set(C.muted)
-  d.text(`GRADE ${data.ecoGrade}`, cx, top + 95, { align: 'center' })
+  d.text(`GRADE ${headGrade}`, cx, top + 95, { align: 'center' })
 
-  // Three metric columns on the right.
+  // Metric columns on the right — carbon + (when scored) repairability + cost.
   const metrics = [
     { label: 'CARBON', value: `-${data.co2ePct}%`, color: C.accent },
+    ...(data.repairScore != null
+      ? [{ label: 'REPAIRABILITY', value: `${data.repairScore} · ${data.repairGrade}`, color: data.repairScore >= 75 ? C.good : data.repairScore >= 50 ? C.warn : C.bad }]
+      : [{ label: 'RECYCLABILITY', value: `+${data.recycPts} pts`, color: C.ink }]),
     { label: 'COST', value: data.costDelta, color: data.costUp ? C.warn : C.good },
-    { label: 'RECYCLABILITY', value: `+${data.recycPts} pts`, color: C.ink },
   ]
   const colX = M + 16 + tileW + 28
   const colW = (CONTENT_W - (16 + tileW + 28) - 16) / 3
@@ -332,11 +338,44 @@ function swapCard(r, s) {
   r.y = top + cardH + 12
 }
 
+// Ranked design fixes that raise the repairability score (from scoring_rules).
+function fixesSection(r, data) {
+  if (!data.fixes || !data.fixes.length) return
+  const d = r.doc
+  r.need(40)
+  r.font('bold', 12).set(C.ink)
+  d.text('Design for longevity', M, r.y + 10)
+  r.font('normal', 10).set(C.muted)
+  d.text(`${data.fixes.length} recommended fixes`, M + 168, r.y + 10)
+  r.y += 26
+
+  const rowH = 26
+  for (const f of data.fixes) {
+    r.need(rowH + 4)
+    const top = r.y
+    r.fill(C.card).stroke(C.line).doc.setLineWidth(0.8)
+    d.roundedRect(M, top, CONTENT_W, rowH, 7, 7, 'FD')
+    const baseline = top + rowH / 2 + 3.5
+    r.font('bold', 9.5).set(C.ink)
+    d.text(f.component, M + 12, baseline)
+    r.font('normal', 9.5).set(C.ink2)
+    const actionX = M + 12 + d.getTextWidth(sanitize(f.component)) + 10
+    const action = d.splitTextToSize(sanitize(f.action), CONTENT_W - (actionX - M) - 70)[0]
+    d.text(action, actionX, baseline)
+    if (f.gain != null) {
+      r.font('bold', 9.5, 'courier').set(C.good)
+      d.text(`+${f.gain} pts`, PAGE_W - M - 14, baseline, { align: 'right' })
+    }
+    r.y += rowH + 5
+  }
+  r.y += 8
+}
+
 function disclaimer(r) {
   r.need(40)
   r.y += 6
   r.paragraph(
-    'Cost and CO2e are computed from the ecocompass material library; figures marked "estimated" in the dataset are indicative, not sourced to a single figure. Materiom recipe families carry directional numbers for a material class, not measured values from one recipe.',
+    'Cost and CO2e are computed from the ecocompass material library; figures marked "estimated" in the dataset are indicative, not sourced to a single figure. Materiom recipe families carry directional numbers for a material class, not measured values from one recipe. The repairability score is a transparent point model (base 70 with deltas for fastening, sourcing, failure risk, recycling potential and service life; see scoring_rules.json).',
     { size: 8, color: C.faint, lh: 1.5 }
   )
 }
@@ -362,6 +401,7 @@ export function generateEcoReport(data) {
   if (data.narrative) narrativeBlock(r, data.narrative)
   ecoScoreBlock(r, data)
   totalsBlock(r, data)
+  fixesSection(r, data)
   swapsSection(r, data)
   disclaimer(r)
 

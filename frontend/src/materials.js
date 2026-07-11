@@ -54,16 +54,21 @@ export const DATA = [
 // clears those bars; anything that fails is flagged with the specific reason.
 // `req` is optional — uploaded BOMs without it fall back to a conservative bar
 // derived from the original material.
+// `fastening` and `sourcing` drive the repairability/longevity score
+// (backend/data/scoring_rules.json): how a part is attached and sourced is the
+// biggest lever on whether a product can be repaired instead of binned. A couple
+// of parts here are deliberately sub-optimal (single-sourced motor, soldered
+// switch) so the design-fix recommendations have something real to surface.
 export const BOM = [
-  { component: 'Outer casing', from: 'ABS', kg: 0.35, req: { tensile: 30, maxTemp: 70 } },
-  { component: 'Motor housing', from: 'aluminum_6061', kg: 0.22, req: { tensile: 120, maxTemp: 120 } },
-  { component: 'Drive motor', from: 'steel', kg: 0.40, req: { tensile: 300, maxTemp: 150 } },
-  { component: 'Cooling fan', from: 'ABS', kg: 0.06, req: { tensile: 25, maxTemp: 80 } },
-  { component: 'Power switch', from: 'ABS', kg: 0.03, req: { tensile: 20, maxTemp: 60 } },
-  { component: 'Dust filter', from: 'ABS', kg: 0.12, req: { tensile: 20, maxTemp: 60 } },
+  { component: 'Outer casing', from: 'ABS', kg: 0.35, fastening: 'screwed', sourcing: 'standard', req: { tensile: 30, maxTemp: 70 } },
+  { component: 'Motor housing', from: 'aluminum_6061', kg: 0.22, fastening: 'screwed', sourcing: 'standard', req: { tensile: 120, maxTemp: 120 } },
+  { component: 'Drive motor', from: 'steel', kg: 0.40, fastening: 'screwed', sourcing: 'single-source', req: { tensile: 300, maxTemp: 150 } },
+  { component: 'Cooling fan', from: 'ABS', kg: 0.06, fastening: 'clipped', sourcing: 'widely available', req: { tensile: 25, maxTemp: 80 } },
+  { component: 'Power switch', from: 'ABS', kg: 0.03, fastening: 'soldered', sourcing: 'standard', req: { tensile: 20, maxTemp: 60 } },
+  { component: 'Dust filter', from: 'ABS', kg: 0.12, fastening: 'clipped', sourcing: 'standard', req: { tensile: 20, maxTemp: 60 } },
   // Safety-critical fastener: needs strength no lower-carbon material in the
   // library can meet → the engine correctly refuses to swap it and shows why.
-  { component: 'Chassis screw', from: 'steel', kg: 0.04, req: { tensile: 480, maxTemp: 200 } },
+  { component: 'Chassis screw', from: 'steel', kg: 0.04, fastening: 'screwed', sourcing: 'standard', req: { tensile: 480, maxTemp: 200 } },
 ]
 
 // Category identity colours — muted, earthy tones for the warm paper canvas.
