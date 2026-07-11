@@ -1,9 +1,15 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
+import {
+  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
+  ResponsiveContainer, Legend, Tooltip,
+} from 'recharts'
 import {
   DATA, BOM, CATEGORIES, CAT_COLORS,
   mat, co2eColor, recycColor, fmtCost, datasetCsv,
 } from './materials.js'
 import { parseBomFile, bomTemplateCsv } from './bomParser.js'
+import { generateEcoReport } from './pdfReport.js'
+import { analyzeBom } from './analysis.js'
 
 // --- ecocompass palette (mirrors the CSS vars in theme.css) ----------------
 const T = {
@@ -62,38 +68,6 @@ function MateriomBadge({ big }) {
       <span style={{ width: 5, height: 5, borderRadius: 99, background: T.good }} /> Materiom
     </span>
   )
-}
-
-// Derive the pros/cons for a single from→to swap. Ported from the ecocompass
-// prototype: each material property that moves meaningfully becomes a pro or con.
-function prosConsFor(f, t) {
-  const pros = [], cons = []
-  if (!f || !t) return { pros, cons }
-
-  const co2eCut = Math.round((1 - t.co2e_per_kg / f.co2e_per_kg) * 100)
-  if (co2eCut >= 5) pros.push(co2eCut + '% lower embodied carbon per kg')
-  else if (co2eCut <= -5) cons.push(Math.abs(co2eCut) + '% higher embodied carbon per kg')
-
-  const costDeltaPct = Math.round((t.cost_per_kg / f.cost_per_kg - 1) * 100)
-  if (costDeltaPct <= -5) pros.push('Lower material cost (' + costDeltaPct + '%/kg)')
-  else if (costDeltaPct >= 5) cons.push('Higher material cost (+' + costDeltaPct + '%/kg)')
-
-  const recycDelta = t.recyclability_score - f.recyclability_score
-  if (recycDelta >= 0.08) pros.push('More recyclable at end of life')
-  else if (recycDelta <= -0.08) cons.push('Less recyclable at end of life')
-
-  if (t.durability_years >= f.durability_years + 3) pros.push('Longer expected service life')
-  else if (t.durability_years <= f.durability_years - 3) cons.push('Shorter expected service life')
-
-  const tensileDeltaPct = (t.tensile_strength_mpa - f.tensile_strength_mpa) / f.tensile_strength_mpa
-  if (tensileDeltaPct <= -0.2) cons.push('Lower tensile strength than original')
-  else if (tensileDeltaPct >= 0.2) pros.push('Higher tensile strength than original')
-
-  if (t.max_temp_c <= f.max_temp_c - 30) cons.push('Lower maximum service temperature')
-  if (f.food_safe && !t.food_safe) cons.push('No longer food-contact safe')
-  if (f.outdoor_safe && !t.outdoor_safe) cons.push('No longer rated for outdoor use')
-
-  return { pros: pros.slice(0, 3), cons: cons.slice(0, 2) }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,130 +133,341 @@ function UploadView({ fileName, onFile, onSample, busy, error }) {
 // ---------------------------------------------------------------------------
 // Results view
 // ---------------------------------------------------------------------------
-function EcoHero({ ecoScore, ecoGrade, scoreColor, headline, co2ePct, costDelta, costUp, recycPts }) {
-  const ringR = 56
-  const ringCirc = 2 * Math.PI * ringR
-  const ringDash = (ringCirc * ecoScore / 100).toFixed(1) + ' ' + ringCirc.toFixed(1)
-  const monoLabel = { fontSize: 10, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }
+
+// Per-line status identity — the green / yellow / red language used everywhere.
+const STATUS = {
+  green: { color: T.good, soft: 'rgba(91,122,78,0.12)', ring: 'rgba(91,122,78,0.34)', label: 'Recommended swap' },
+  yellow: { color: T.warn, soft: 'rgba(168,122,60,0.12)', ring: 'rgba(168,122,60,0.34)', label: 'Review trade-offs' },
+  red: { color: T.bad, soft: 'rgba(176,87,110,0.12)', ring: 'rgba(176,87,110,0.40)', label: 'Flagged — no viable swap' },
+}
+
+const signedMoney = (v) => (v < -0.005 ? '−$' : '+$') + Math.abs(v).toFixed(2)
+
+function StatusDot({ status, size = 9 }) {
+  const s = STATUS[status]
+  return <span style={{ width: size, height: size, borderRadius: 99, background: s.color, boxShadow: `0 0 0 3px ${s.soft}`, display: 'inline-block', flexShrink: 0 }} />
+}
+
+// The carbon↔cost priority slider. Moving it re-calls the analyzer with new
+// weights, which live-updates every ranking below.
+function PrioritySlider({ value, onChange, loading }) {
+  const pct = Math.round(value * 100)
   return (
-    <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 16, padding: '32px 34px', marginBottom: 24, display: 'flex', alignItems: 'center', gap: 36, flexWrap: 'wrap' }}>
-      <div style={{ position: 'relative', width: 132, height: 132, flexShrink: 0 }}>
-        <svg width={132} height={132} viewBox="0 0 132 132" style={{ transform: 'rotate(-90deg)' }}>
-          <circle cx="66" cy="66" r={ringR} fill="none" stroke="#E7E1D3" strokeWidth={10} />
-          <circle cx="66" cy="66" r={ringR} fill="none" stroke={scoreColor} strokeWidth={10} strokeLinecap="round" strokeDasharray={ringDash} />
-        </svg>
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: '-0.03em', color: scoreColor, lineHeight: 1 }}>{ecoScore}</div>
-          <div className="mono" style={{ fontSize: 10.5, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 5 }}>Grade {ecoGrade}</div>
+    <div className="no-print" style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 14, padding: '18px 22px', marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>
+          Ranking priority
+          {loading && <span style={{ color: T.muted, fontWeight: 400 }}> · re-ranking…</span>}
         </div>
+        <div className="mono" style={{ fontSize: 11.5, color: T.muted }}>{pct}% carbon / {100 - pct}% cost</div>
       </div>
-      <div style={{ flex: 1, minWidth: 260 }}>
-        <div className="mono" style={{ fontSize: 11, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Eco score · this build</div>
-        <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 8, lineHeight: 1.4 }}>{headline}</div>
-        <div style={{ display: 'flex', gap: 22, marginTop: 18, flexWrap: 'wrap' }}>
-          <div>
-            <div className="mono" style={monoLabel}>Carbon</div>
-            <div style={{ fontSize: 18, fontWeight: 600, marginTop: 3, color: T.accent }}>−{co2ePct}%</div>
-          </div>
-          <div>
-            <div className="mono" style={monoLabel}>Cost</div>
-            <div style={{ fontSize: 18, fontWeight: 600, marginTop: 3, color: costUp ? T.warn : T.good }}>{costDelta}</div>
-          </div>
-          <div>
-            <div className="mono" style={monoLabel}>Recyclability</div>
-            <div style={{ fontSize: 18, fontWeight: 600, marginTop: 3 }}>+{recycPts} pts</div>
-          </div>
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12 }}>
+        <span style={{ fontSize: 11.5, color: value < 0.5 ? T.ink : T.muted, fontWeight: 500, whiteSpace: 'nowrap' }}>Cost-focused</span>
+        <input type="range" min={0} max={100} value={pct}
+          onChange={(e) => onChange(Number(e.target.value) / 100)}
+          style={{ flex: 1, accentColor: T.accent, cursor: 'pointer' }} />
+        <span style={{ fontSize: 11.5, color: value > 0.5 ? T.ink : T.muted, fontWeight: 500, whiteSpace: 'nowrap' }}>Carbon-focused</span>
       </div>
     </div>
   )
 }
 
-function SwapCard({ s }) {
-  const monoMini = { fontSize: 9.5, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }
+function StatCard({ label, value, sub, color }) {
   return (
-    <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 14, padding: '20px 22px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 14.5 }}>{s.component}</div>
-          <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, marginTop: 6, flexWrap: 'wrap' }}>
-            {s.swapped ? (
-              <>
-                <span style={{ color: T.faint, textDecoration: 'line-through' }}>{s.from}</span>
-                <Icon size={13} stroke={T.muted} sw={2} d={ARROW} />
-                <span style={{ color: T.ink, fontWeight: 500 }}>{s.to}</span>
-              </>
-            ) : (
-              <span style={{ color: T.ink2, fontWeight: 500 }}>{s.from} · already lowest-carbon</span>
-            )}
-          </div>
+    <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 14, padding: '16px 18px' }}>
+      <div className="mono" style={{ fontSize: 10, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
+      <div style={{ fontSize: 25, fontWeight: 700, letterSpacing: '-0.02em', marginTop: 8, color: color || T.ink }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: T.muted, marginTop: 4, lineHeight: 1.4 }}>{sub}</div>}
+    </div>
+  )
+}
+
+// Annual-volume input × per-unit carbon saved → tonnes of CO₂e avoided a year.
+function ScaledImpact({ co2eSavedPerUnit, annualVolume, setAnnualVolume }) {
+  const tons = Math.max(0, co2eSavedPerUnit * annualVolume / 1000)
+  return (
+    <div style={{ background: T.accent, color: T.page, borderRadius: 16, padding: '22px 26px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap', marginBottom: 26 }}>
+      <div>
+        <div className="mono" style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.14em', opacity: 0.72 }}>Scaled annual impact</div>
+        <div style={{ fontSize: 40, fontWeight: 700, letterSpacing: '-0.03em', marginTop: 6, lineHeight: 1 }}>
+          {tons.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+          <span style={{ fontSize: 17, fontWeight: 500, opacity: 0.85, marginLeft: 8 }}>t CO₂e / year</span>
         </div>
-        <div style={{ display: 'flex', gap: 18, textAlign: 'right' }}>
-          <div>
-            <div className="mono" style={monoMini}>Cost/unit</div>
-            <div className="mono" style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{s.cost}</div>
-          </div>
-          <div>
-            <div className="mono" style={monoMini}>CO₂e/unit</div>
-            <div className="mono" style={{ fontSize: 13, fontWeight: 500, marginTop: 2, color: T.accent }}>{s.co2e}</div>
-          </div>
-        </div>
+        <div style={{ fontSize: 12.5, opacity: 0.82, marginTop: 8 }}>{co2eSavedPerUnit.toFixed(1)} kg saved per unit × annual production volume</div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 16, paddingTop: 16, borderTop: `1px solid ${T.line2}` }}>
-        <div>
-          <div className="mono" style={{ fontSize: 10, color: T.accent, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Pros</div>
-          {s.pros.length ? s.pros.map((p, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: T.ink2, lineHeight: 1.5, marginBottom: 9 }}>
-              <Icon size={13} stroke={T.accent} sw={2.4} d={['M20 6 9 17l-5-5']} style={{ flexShrink: 0, marginTop: 2 }} />
-              <span style={{ flex: 1 }}>{p}</span>
-            </div>
-          )) : <div style={{ fontSize: 12.5, color: T.muted }}>No notable gains flagged.</div>}
-        </div>
-        <div>
-          <div className="mono" style={{ fontSize: 10, color: T.bad, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Cons</div>
-          {s.cons.length ? s.cons.map((c, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: T.ink2, lineHeight: 1.5, marginBottom: 9 }}>
-              <Icon size={13} stroke={T.bad} sw={2.4} d={['M18 6 6 18M6 6l12 12']} style={{ flexShrink: 0, marginTop: 2 }} />
-              <span style={{ flex: 1 }}>{c}</span>
-            </div>
-          )) : <div style={{ fontSize: 12.5, color: T.muted }}>No material trade-offs identified.</div>}
-        </div>
+      <div className="no-print">
+        <div className="mono" style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.72, marginBottom: 6 }}>Units / year</div>
+        <input type="number" min={0} value={annualVolume}
+          onChange={(e) => setAnnualVolume(Math.max(0, Number(e.target.value) || 0))}
+          className="mono"
+          style={{ width: 150, padding: '10px 12px', borderRadius: 9, border: '1px solid rgba(255,255,255,0.25)', fontSize: 15, background: 'rgba(255,255,255,0.14)', color: T.page, outline: 'none' }} />
       </div>
     </div>
+  )
+}
+
+// Radar comparing the original material vs the top suggestion across the four
+// normalised axes (higher = better on every axis).
+function RadarPanel({ line }) {
+  return (
+    <div style={{ width: '100%', height: 250, minWidth: 240 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <RadarChart data={line.radar} outerRadius="70%">
+          <PolarGrid stroke={T.line} />
+          <PolarAngleAxis dataKey="axis" tick={{ fill: T.ink3, fontSize: 11 }} />
+          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+          <Radar name={line.from} dataKey="original" stroke={T.muted} fill={T.muted} fillOpacity={0.16} strokeWidth={1.5} />
+          {line.swapped && <Radar name={line.to} dataKey="suggestion" stroke={T.accent} fill={T.accent} fillOpacity={0.24} strokeWidth={1.6} />}
+          <Legend wrapperStyle={{ fontSize: 11, fontFamily: "'Geist Mono', monospace" }} />
+          <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8, border: `1px solid ${T.line}`, background: T.card }} />
+        </RadarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// The per-component "results table": the top few viable candidates the engine
+// ranked, plus the most tempting rejected ones with the reason they were cut.
+function CandidatesTable({ line }) {
+  const viable = line.viable.slice(0, 4)
+  const rejected = line.rejected.slice(0, 3)
+  const th = { fontFamily: "'Geist Mono', monospace", fontSize: 9.5, fontWeight: 400, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.06em', textAlign: 'left', padding: '7px 10px', borderBottom: `1px solid ${T.line}` }
+  const td = { padding: '9px 10px', borderBottom: `1px solid ${T.line2}`, fontSize: 12 }
+  const numTd = { ...td, textAlign: 'right', fontFamily: "'Geist Mono', monospace" }
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 11, overflow: 'hidden', background: T.page }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 380 }}>
+          <thead>
+            <tr>
+              <th style={th}>Candidate</th>
+              <th style={{ ...th, textAlign: 'right' }}>CO₂e</th>
+              <th style={{ ...th, textAlign: 'right' }}>Cost</th>
+              <th style={{ ...th, textAlign: 'right' }}>Recyc</th>
+              <th style={{ ...th, textAlign: 'right' }}>Verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            {viable.map((c, i) => {
+              const chosen = line.suggestion && c.material === line.suggestion.material
+              return (
+                <tr key={c.material} style={{ background: chosen ? STATUS.green.soft : 'transparent' }}>
+                  <td style={td}>
+                    <span className="mono" style={{ fontWeight: chosen ? 700 : 500, fontSize: 11.5 }}>{c.material}</span>
+                    {c.source === 'materiom' && <span style={{ marginLeft: 6 }}><MateriomBadge /></span>}
+                  </td>
+                  <td style={{ ...numTd, color: co2eColor(c.co2e) }}>{c.co2e.toFixed(2)}</td>
+                  <td style={numTd}>{fmtCost(c.cost)}</td>
+                  <td style={numTd}>{c.recyclability.toFixed(2)}</td>
+                  <td style={{ ...numTd, color: T.good, fontWeight: chosen ? 700 : 500 }}>{chosen ? '★ chosen' : `#${i + 1} viable`}</td>
+                </tr>
+              )
+            })}
+            {rejected.map((c) => (
+              <tr key={c.material}>
+                <td style={{ ...td, color: T.ink3 }}>
+                  <span className="mono" style={{ fontSize: 11.5, textDecoration: 'line-through', textDecorationColor: STATUS.red.ring }}>{c.material}</span>
+                </td>
+                <td style={{ ...numTd, color: co2eColor(c.co2e) }}>{c.co2e.toFixed(2)}</td>
+                <td style={numTd}>{fmtCost(c.cost)}</td>
+                <td style={numTd}>{c.recyclability.toFixed(2)}</td>
+                <td style={{ ...numTd, color: T.bad }} title={c.reasons.join('; ')}>✕ rejected</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// Prominent rejection callout — the credibility feature. Names the requirement
+// that must be met, then the seductive low-carbon options and exactly why each
+// was turned down.
+function RejectionPanel({ line }) {
+  const shown = line.rejected.slice(0, 4)
+  return (
+    <div style={{ background: STATUS.red.soft, border: `1px solid ${STATUS.red.ring}`, borderRadius: 12, padding: '15px 17px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <Icon size={15} stroke={T.bad} sw={2.2} d={['M12 9v4', 'M12 17h.01', 'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z']} />
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#8A3F52' }}>No viable swap — kept the original</div>
+      </div>
+      <div style={{ fontSize: 12.5, color: T.ink2, lineHeight: 1.55, marginBottom: 12 }}>
+        This part must clear <strong>{line.requirementText}</strong>. Every lower-impact candidate fails at least one of those bars:
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {shown.map((c) => (
+          <div key={c.material} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12, lineHeight: 1.5 }}>
+            <span className="mono" style={{ fontWeight: 600, color: T.ink, minWidth: 128, flexShrink: 0 }}>{c.material}</span>
+            <span style={{ color: T.bad }}>{c.reasons[0]}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Pros / cons split for a viable swap.
+function ProsCons({ line }) {
+  const col = (title, items, color, mark, empty) => (
+    <div>
+      <div className="mono" style={{ fontSize: 10, color, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>{title}</div>
+      {items.length ? items.map((t, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: T.ink2, lineHeight: 1.5, marginBottom: 8 }}>
+          <Icon size={13} stroke={color} sw={2.4} d={mark} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span style={{ flex: 1 }}>{t}</span>
+        </div>
+      )) : <div style={{ fontSize: 12.5, color: T.muted }}>{empty}</div>}
+    </div>
+  )
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+      {col('Pros', line.pros, T.accent, ['M20 6 9 17l-5-5'], 'No notable gains flagged.')}
+      {col('Cons', line.cons, T.bad, ['M18 6 6 18M6 6l12 12'], 'No material trade-offs identified.')}
+    </div>
+  )
+}
+
+// One expandable results row: the scannable summary always shows; the detail
+// (radar + candidate table + reasons) drops down when opened.
+function LineRow({ line, open, onToggle }) {
+  const s = STATUS[line.status]
+  const carbonSaved = line.co2eFrom - line.co2eTo
+  const costDelta = line.costTo - line.costFrom
+  const cell = { padding: '13px 12px', borderBottom: open ? 'none' : `1px solid ${T.line2}`, fontSize: 13, verticalAlign: 'middle' }
+  return (
+    <>
+      <tr onClick={onToggle} style={{ cursor: 'pointer', background: open ? T.cardAlt : 'transparent' }}
+        onMouseOver={(e) => { if (!open) e.currentTarget.style.background = T.cardAlt }}
+        onMouseOut={(e) => { if (!open) e.currentTarget.style.background = 'transparent' }}>
+        <td style={{ ...cell, paddingLeft: 18, width: 30 }}><StatusDot status={line.status} /></td>
+        <td style={cell}>
+          <div style={{ fontWeight: 600 }}>{line.component}</div>
+          <div style={{ fontSize: 11.5, color: s.color, marginTop: 2 }}>{s.label}</div>
+        </td>
+        <td style={{ ...cell }} className="mono">
+          {line.swapped ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, flexWrap: 'wrap' }}>
+              <span style={{ color: T.faint, textDecoration: 'line-through' }}>{line.from}</span>
+              <Icon size={12} stroke={T.muted} sw={2} d={ARROW} />
+              <span style={{ color: T.ink, fontWeight: 600 }}>{line.to}</span>
+            </span>
+          ) : (
+            <span style={{ fontSize: 12, color: T.ink2 }}>{line.from} <span style={{ color: T.muted }}>· kept</span></span>
+          )}
+        </td>
+        <td style={{ ...cell, textAlign: 'right' }} className="mono">
+          {carbonSaved > 0.05
+            ? <span style={{ color: T.good, fontWeight: 600 }}>−{carbonSaved.toFixed(1)} kg</span>
+            : <span style={{ color: T.muted }}>—</span>}
+        </td>
+        <td style={{ ...cell, textAlign: 'right' }} className="mono">
+          {line.swapped
+            ? <span style={{ color: costDelta > 0.005 ? T.warn : T.good, fontWeight: 600 }}>{signedMoney(costDelta)}</span>
+            : <span style={{ color: T.muted }}>—</span>}
+        </td>
+        <td style={{ ...cell, textAlign: 'right', paddingRight: 18, width: 40 }}>
+          <Icon size={16} stroke="#BEB6A3" sw={2} d={open ? ['m18 15-6-6-6 6'] : ['m6 9 6 6 6-6']} />
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={6} style={{ padding: 0, borderBottom: `1px solid ${T.line2}`, background: T.cardAlt }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 340px) 1fr', gap: 22, padding: '8px 20px 22px', alignItems: 'start' }}>
+              <div>
+                <div className="mono" style={{ fontSize: 10, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Property profile</div>
+                <RadarPanel line={line} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, paddingTop: 6 }}>
+                <div style={{ fontSize: 12.5, color: T.ink2, lineHeight: 1.55 }}>{line.statusReason}</div>
+                {line.status === 'red' ? <RejectionPanel line={line} /> : <ProsCons line={line} />}
+                <div>
+                  <div className="mono" style={{ fontSize: 10, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                    Candidates considered <span style={{ textTransform: 'none', letterSpacing: 0 }}>· {line.viable.length} viable / {line.rejected.length} rejected</span>
+                  </div>
+                  <CandidatesTable line={line} />
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
 
 function ResultsView({ setView, bom: bomInput, meta, warnings }) {
-  const derived = useMemo(() => {
-    let costFrom = 0, costTo = 0, co2eFrom = 0, co2eTo = 0, recycFromSum = 0, recycToSum = 0
-    const swaps = bomInput.map((b) => {
-      const f = mat(b.from), t = mat(b.to)
-      const tc = t.cost_per_kg * b.kg, fe = f.co2e_per_kg * b.kg, te = t.co2e_per_kg * b.kg
-      costFrom += f.cost_per_kg * b.kg; costTo += tc; co2eFrom += fe; co2eTo += te
-      recycFromSum += f.recyclability_score; recycToSum += t.recyclability_score
-      const { pros, cons } = prosConsFor(f, t)
-      return { component: b.component, from: b.from, to: b.to, kg: b.kg, swapped: b.from !== b.to, cost: fmtCost(tc), co2e: te.toFixed(1), pros, cons }
-    })
-    const n = bomInput.length || 1
-    return { swaps, costFrom, costTo, co2eFrom, co2eTo, recycFrom: recycFromSum / n, recycTo: recycToSum / n }
-  }, [bomInput])
+  const [carbonWeight, setCarbonWeight] = useState(0.6)
+  const [annualVolume, setAnnualVolume] = useState(10000)
+  const [analysis, setAnalysis] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(() => new Set())
 
-  const costUp = derived.costTo > derived.costFrom
-  const costDelta = (costUp ? '+' : '−') + '$' + Math.abs(derived.costTo - derived.costFrom).toFixed(2)
-  const co2ePct = Math.round((1 - derived.co2eTo / (derived.co2eFrom || 1)) * 100)
-  const recycPts = Math.round((derived.recycTo - derived.recycFrom) * 100)
-  let ecoScore = Math.round(55 + co2ePct * 0.32 + recycPts * 0.22 + (costUp ? -6 : 6))
-  ecoScore = Math.max(0, Math.min(99, ecoScore))
-  const ecoGrade = ecoScore >= 90 ? 'A' : ecoScore >= 75 ? 'B' : ecoScore >= 60 ? 'C' : ecoScore >= 45 ? 'D' : 'F'
-  const scoreColor = ecoScore >= 75 ? T.good : ecoScore >= 50 ? T.warn : T.bad
-  const headline = ecoGrade <= 'B'
-    ? 'This build meaningfully cuts embodied carbon and improves recyclability over the original spec.'
-    : 'Solid gains on carbon and recyclability, with a few trade-offs worth reviewing before sign-off.'
+  // The upload/slider → analyzer seam. Re-runs whenever the BOM or the priority
+  // weight changes; this is the single call site a real POST /analyze-bom
+  // backend slots into (see analysis.js).
+  useEffect(() => {
+    let live = true
+    setLoading(true)
+    analyzeBom(bomInput, { carbon: carbonWeight }).then((res) => {
+      if (!live) return
+      setAnalysis(res)
+      setLoading(false)
+      // On the first analysis, auto-open any flagged line so the rejection
+      // reasoning is visible without a click.
+      setExpanded((prev) => (prev.size ? prev : new Set(res.lines.filter((l) => l.status === 'red').map((l) => l.component))))
+    })
+    return () => { live = false }
+  }, [bomInput, carbonWeight])
+
   const totalKg = bomInput.reduce((s, b) => s + b.kg, 0)
+  const toggle = (name) => setExpanded((prev) => {
+    const next = new Set(prev)
+    next.has(name) ? next.delete(name) : next.add(name)
+    return next
+  })
+
+  const summary = analysis?.summary
+  const headline = summary
+    ? (summary.flaggedCount > 0
+      ? `${summary.viableCount} of ${bomInput.length} components have a recommended lower-impact swap; ${summary.flaggedCount} flagged for review.`
+      : (summary.ecoGrade <= 'B'
+        ? 'This build meaningfully cuts embodied carbon while holding cost and function.'
+        : 'Solid carbon and recyclability gains with a few trade-offs to review.'))
+    : ''
+
+  // Assemble the payload the PDF generator renders from the live analysis.
+  const exportPdf = () => {
+    if (!analysis) return
+    generateEcoReport({
+      meta,
+      componentCount: bomInput.length,
+      totalKg,
+      dateStr: new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }),
+      ecoScore: summary.ecoScore, ecoGrade: summary.ecoGrade, headline,
+      co2ePct: summary.co2ePct, costDelta: signedMoney(summary.costDelta), costUp: summary.costUp, recycPts: summary.recycPts,
+      costFrom: summary.costFrom, costTo: summary.costTo,
+      co2eFrom: summary.co2eFrom, co2eTo: summary.co2eTo,
+      swaps: analysis.lines.map((l) => ({
+        component: l.component,
+        from: l.from,
+        to: l.to,
+        swapped: l.swapped,
+        flagged: l.status === 'red',
+        note: l.status === 'red' ? (l.rejected[0] ? `${l.rejected[0].material}: ${l.rejected[0].reasons[0]}` : l.statusReason) : '',
+        cost: fmtCost(l.costTo),
+        co2e: l.co2eTo.toFixed(1),
+        pros: l.status === 'red' ? [`Must clear ${l.requirementText}`] : l.pros,
+        cons: l.status === 'red' ? l.rejected.slice(0, 2).map((r) => `${r.material}: ${r.reasons[0]}`) : l.cons,
+      })),
+    })
+  }
+
+  const th = { fontFamily: "'Geist Mono', monospace", fontSize: 10.5, fontWeight: 400, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: `1px solid ${T.line}`, padding: '12px', textAlign: 'left' }
 
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto', padding: '44px 32px 96px' }}>
-      <div className="no-print" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 30 }}>
+    <div style={{ maxWidth: 1000, margin: '0 auto', padding: '44px 32px 96px' }}>
+      <div className="no-print" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 26 }}>
         <div>
           <a href="#" onClick={(e) => { e.preventDefault(); setView('upload') }} style={{ fontSize: 13, fontWeight: 500, color: T.muted, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <Icon size={14} sw={2} d={['M19 12H5', 'm12 19-7-7 7-7']} /> New analysis
@@ -294,7 +479,7 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
           <button onClick={downloadDataset} style={btnGhost}>
             <Icon size={14} sw={2} d={['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']} /> Export dataset
           </button>
-          <button onClick={() => window.print()} style={btnSolid}>
+          <button onClick={exportPdf} disabled={!analysis} style={{ ...btnSolid, opacity: analysis ? 1 : 0.5 }}>
             <Icon size={14} stroke={T.page} sw={2} d={['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M9 15h6M9 11h3']} /> Export PDF report
           </button>
         </div>
@@ -309,15 +494,61 @@ function ResultsView({ setView, bom: bomInput, meta, warnings }) {
         </div>
       )}
 
-      <EcoHero ecoScore={ecoScore} ecoGrade={ecoGrade} scoreColor={scoreColor} headline={headline}
-        co2ePct={co2ePct} costDelta={costDelta} costUp={costUp} recycPts={recycPts} />
+      <PrioritySlider value={carbonWeight} onChange={setCarbonWeight} loading={loading} />
 
-      <div style={{ fontSize: 15, fontWeight: 600, margin: '34px 0 14px' }}>Suggested replacements <span style={{ color: T.muted, fontWeight: 400 }}>· {derived.swaps.length} components</span></div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {derived.swaps.map((s) => <SwapCard key={s.component} s={s} />)}
-      </div>
+      {!summary ? (
+        <div style={{ padding: '80px 0', textAlign: 'center', color: T.muted, fontSize: 14 }}>Analyzing bill of materials…</div>
+      ) : (
+        <>
+          {/* Summary dashboard */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '4px 0 14px', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>Analysis summary</div>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: T.card, border: `1px solid ${T.line}`, borderRadius: 99, padding: '5px 13px' }}>
+              <span className="mono" style={{ fontSize: 10.5, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Eco score</span>
+              <span style={{ fontSize: 15, fontWeight: 700, color: summary.ecoScore >= 75 ? T.good : summary.ecoScore >= 50 ? T.warn : T.bad }}>{summary.ecoScore}</span>
+              <span className="mono" style={{ fontSize: 11, color: T.muted }}>{summary.ecoGrade}</span>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 18 }}>
+            <StatCard label="CO₂e saved / unit" value={`${summary.co2eSaved.toFixed(1)} kg`} sub={`−${summary.co2ePct}% vs baseline spec`} color={T.accent} />
+            <StatCard label="Cost delta / unit" value={signedMoney(summary.costDelta)} sub={summary.costUp ? 'added material cost' : 'net material saving'} color={summary.costUp ? T.warn : T.good} />
+            <StatCard label="Viable swaps" value={`${summary.viableCount}`} sub={`of ${bomInput.length} components`} color={T.good} />
+            <StatCard label="Flagged" value={`${summary.flaggedCount}`} sub={summary.flaggedCount ? 'no viable swap — review' : 'none — all resolved'} color={summary.flaggedCount ? T.bad : T.ink3} />
+          </div>
 
-      <div className="no-print" style={{ fontSize: 11.5, color: T.faint, marginTop: 20, lineHeight: 1.65 }}>Cost and CO₂e are computed from the material library; figures marked <em>estimated</em> in the dataset are indicative, not sourced to a single figure.</div>
+          <ScaledImpact co2eSavedPerUnit={summary.co2eSaved} annualVolume={annualVolume} setAnnualVolume={setAnnualVolume} />
+
+          {/* Per-component results table (expand a row for radar + reasoning) */}
+          <div style={{ fontSize: 15, fontWeight: 600, margin: '30px 0 12px' }}>
+            Component suggestions <span style={{ color: T.muted, fontWeight: 400 }}>· click a row for the property radar &amp; candidate breakdown</span>
+          </div>
+          <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 14, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 660 }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...th, paddingLeft: 18 }}></th>
+                    <th style={th}>Component</th>
+                    <th style={th}>Suggested swap</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Carbon</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Cost Δ</th>
+                    <th style={{ ...th, textAlign: 'right', paddingRight: 18 }}>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analysis.lines.map((line) => (
+                    <LineRow key={line.component} line={line} open={expanded.has(line.component)} onToggle={() => toggle(line.component)} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="no-print" style={{ fontSize: 11.5, color: T.faint, marginTop: 18, lineHeight: 1.65 }}>
+            Rankings recompute live from the priority slider. A swap is only offered when it clears the part's functional requirements — anything that fails is flagged with the specific reason, never silently dropped. Figures marked <em>estimated</em> in the dataset are indicative.
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -45,15 +45,22 @@ export const DATA = [
   { name: 'bacterial_cellulose', category: 'natural', density: 1000, tensile_strength_mpa: 20, max_temp_c: 120, cost_per_kg: 15.0, co2e_per_kg: 0.8, recyclability_score: 0.8, durability_years: 3, outdoor_safe: false, food_safe: false, source: 'materiom', source_url: 'https://materials-database.materiom.org/commons', source_note: 'INDICATIVE (Materiom recipe family). Bacterial cellulose grown by a kombucha-style SCOBY into a leather-like sheet. Tensile ~20 MPa est. (dry, highly process-dependent). CO2e ~0.8 est.: grown on sugar feedstock, low embodied carbon, indicative only. Cost is a rough estimate reflecting slow growth. Home-compostable; moisture-sensitive. Explore the grow-protocols in the Materiom Commons.' },
 ]
 
-// Demo bill of materials — an ergonomic task chair, each component mapped from a
-// baseline material to a lower-carbon swap.
+// Demo bill of materials — an ergonomic task chair. Each line carries its
+// baseline material plus the FUNCTIONAL REQUIREMENTS that part actually has to
+// meet (min tensile / service temp / food / outdoor). The swap engine picks the
+// best lower-impact material that clears those bars; anything that fails is
+// flagged with the specific reason. `req` is optional — uploaded BOMs without it
+// fall back to a conservative bar derived from the original material.
 export const BOM = [
-  { component: 'Base column', from: 'steel', to: 'recycled_steel', kg: 2.4 },
-  { component: 'Support frame', from: 'aluminum_6061', to: 'recycled_aluminum', kg: 1.8 },
-  { component: 'Seat shell', from: 'ABS', to: 'recycled_PET', kg: 1.2 },
-  { component: 'Backrest panel', from: 'ABS', to: 'recycled_PET', kg: 0.9 },
-  { component: 'Cushion backing', from: 'PET', to: 'wool_felt', kg: 0.6 },
-  { component: 'Fasteners & brackets', from: 'steel', to: 'recycled_steel', kg: 0.3 },
+  { component: 'Base column', from: 'steel', kg: 2.4, req: { tensile: 350, maxTemp: 200 } },
+  { component: 'Support frame', from: 'aluminum_6061', kg: 1.8, req: { tensile: 200, maxTemp: 120 } },
+  { component: 'Seat shell', from: 'ABS', kg: 1.2, req: { tensile: 30, maxTemp: 60 } },
+  { component: 'Backrest panel', from: 'ABS', kg: 0.9, req: { tensile: 25, maxTemp: 60 } },
+  { component: 'Cushion backing', from: 'PET', kg: 0.6, req: { tensile: 2, maxTemp: 60 } },
+  { component: 'Fasteners & brackets', from: 'steel', kg: 0.3, req: { tensile: 400, maxTemp: 200 } },
+  // Safety-critical: needs strength no lower-carbon material in the library can
+  // meet → the engine correctly refuses to swap it and shows why.
+  { component: 'Caster spindle', from: 'steel', kg: 0.5, req: { tensile: 480, maxTemp: 200 } },
 ]
 
 // Category identity colours — muted, earthy tones for the warm paper canvas.

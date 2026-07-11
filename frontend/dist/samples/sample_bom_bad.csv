@@ -1,0 +1,6 @@
+component_name,material,fastening_type,sourcing_type,quantity
+Rear casing,Plastic (ABS),Glued,Proprietary,1
+Battery,Lithium-ion,Sealed,Single-source,1
+Screen assembly,Composite (unspecified),Glued,Proprietary,1
+Charging port,Plastic (generic),Sealed,Single-source,1
+Internal frame,Plastic (generic),Welded,Proprietary,1
