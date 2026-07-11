@@ -894,11 +894,26 @@ export default function App() {
     setFileName(file.name); setUploadError(null); setBusy(true)
     const ext = (file.name.split('.').pop() || '').toLowerCase()
     try {
-      // CSV is parsed instantly client-side; everything else (PDF, Excel, images)
-      // is read by the AI extractor on the backend.
-      const { rows, warnings: warn, meta: m, error } = ext === 'csv'
-        ? await parseBomFile(file)
-        : await extractBom(file)
+      let result
+      if (ext === 'csv') {
+        // Fast path: the offline parser handles a tidy component/material/kg CSV.
+        result = await parseBomFile(file)
+        // If it struggled (odd headers, missing columns, unmatched materials),
+        // re-read the same file with the AI extractor, which copes with real-world
+        // layouts. Falls back to the client parse if the backend/key is unavailable.
+        const rowCount = result.rows ? result.rows.length : 0
+        const weak = !!result.error || rowCount === 0 || (result.warnings?.length || 0) >= rowCount
+        if (weak) {
+          try {
+            const ai = await extractBom(file)
+            if (ai.rows && ai.rows.length) result = ai
+          } catch { /* keep the client-side result */ }
+        }
+      } else {
+        // PDF, Excel, images — always read with AI.
+        result = await extractBom(file)
+      }
+      const { rows, warnings: warn, meta: m, error } = result
       if (error) { setUploadError(error); return }
       if (!rows || !rows.length) {
         setUploadError((warn && warn[0]) || 'No usable rows found in the file.')
