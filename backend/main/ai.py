@@ -364,12 +364,45 @@ def _xlsx_to_text(data):
     return "\n".join(lines)
 
 
+def _sniff_image_media_type(data):
+    """Detect the real image format from magic bytes, independent of the filename.
+
+    Returns an Anthropic-supported media type, the literal ``"image/heic"`` for
+    HEIC/HEIF (which the API can't read — the frontend normalises these to JPEG,
+    but a stray one gets a clear message), or None if it isn't a known image."""
+    if not data or len(data) < 12:
+        return None
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[4:8] == b"ftyp" and data[8:12] in (b"heic", b"heix", b"hevc", b"heif", b"mif1", b"msf1"):
+        return "image/heic"
+    return None
+
+
 def _content_block(data, filename):
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-    if ext in _IMAGE_TYPES:
-        return {"type": "image", "source": {"type": "base64", "media_type": _IMAGE_TYPES[ext],
+    sniffed = _sniff_image_media_type(data)
+
+    if sniffed == "image/heic" or ext in ("heic", "heif"):
+        raise ValueError(
+            "This looks like an iPhone HEIC photo, which the analyzer can't read. "
+            "Retake it with the in-app camera, or set iOS Settings -> Camera -> Formats "
+            'to "Most Compatible".'
+        )
+
+    # Trust the content over the extension so a mislabelled (or extension-less)
+    # image still scans.
+    media_type = sniffed or _IMAGE_TYPES.get(ext)
+    if media_type:
+        return {"type": "image", "source": {"type": "base64", "media_type": media_type,
                                             "data": base64.standard_b64encode(data).decode()}}
-    if ext == "pdf":
+    if ext == "pdf" or data[:5] == b"%PDF-":
         return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
                                                "data": base64.standard_b64encode(data).decode()}}
     if ext == "xlsx":

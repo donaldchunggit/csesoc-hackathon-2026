@@ -9,6 +9,7 @@ import BarcodeScanner from './BarcodeScanner.jsx'
 import ScanResultCard from './ScanResultCard.jsx'
 import ContributePrompt from './ContributePrompt.jsx'
 import { scanBarcode, scanPhoto } from '../scanApi.js'
+import { normalizeImage } from './normalizeImage.js'
 
 export default function ScanView() {
   const [scan, setScan] = useState(null)
@@ -35,7 +36,9 @@ export default function ScanView() {
     if (!file) return
     setBusy(true); setBusyLabel('Reading photo…'); setError(''); setScan(null)
     try {
-      setScan(await scanPhoto(file))
+      // Convert HEIC/large phone photos to a right-sized JPEG the vision API can read.
+      const prepared = await normalizeImage(file)
+      setScan(await scanPhoto(prepared))
     } catch (err) {
       setError(err.message || 'Couldn\'t read that photo.')
     } finally {
