@@ -1,0 +1,31 @@
+{
+  "_meta": {
+    "purpose": "Coarse per-category cradle-to-gate carbon intensity bands for the consumer scan mode's ESTIMATED carbon grade. Claude infers a product's category; we map it here to a deterministic band so the number itself is never AI-invented.",
+    "units": "co2e_per_kg = approx kg CO2e per kg of product (cradle-to-gate)",
+    "score": "score_0_100: higher = greener (lower carbon). Bands: Bad 0-24, Poor 25-49, Good 50-74, Excellent 75-100.",
+    "TODO": "PLACEHOLDER NUMBERS. Replace with real USEEIO / Agribalyse-derived intensities before showing to real users. Values are order-of-magnitude only.",
+    "provenance": "ai_estimated"
+  },
+  "categories": {
+    "smartphone":              { "co2e_per_kg": 90, "score_0_100": 12, "band": "Bad" },
+    "laptop":                  { "co2e_per_kg": 75, "score_0_100": 16, "band": "Bad" },
+    "tablet":                  { "co2e_per_kg": 70, "score_0_100": 18, "band": "Bad" },
+    "television":              { "co2e_per_kg": 45, "score_0_100": 30, "band": "Poor" },
+    "desktop_monitor":         { "co2e_per_kg": 40, "score_0_100": 33, "band": "Poor" },
+    "small_kitchen_appliance": { "co2e_per_kg": 22, "score_0_100": 45, "band": "Poor" },
+    "vacuum_cleaner":          { "co2e_per_kg": 20, "score_0_100": 48, "band": "Poor" },
+    "power_tool":              { "co2e_per_kg": 18, "score_0_100": 52, "band": "Good" },
+    "washing_machine":         { "co2e_per_kg": 15, "score_0_100": 55, "band": "Good" },
+    "dishwasher":              { "co2e_per_kg": 15, "score_0_100": 55, "band": "Good" },
+    "refrigerator":            { "co2e_per_kg": 17, "score_0_100": 53, "band": "Good" },
+    "headphones":              { "co2e_per_kg": 30, "score_0_100": 40, "band": "Poor" },
+    "clothing_synthetic":      { "co2e_per_kg": 25, "score_0_100": 43, "band": "Poor" },
+    "clothing_natural":        { "co2e_per_kg": 12, "score_0_100": 62, "band": "Good" },
+    "footwear":                { "co2e_per_kg": 20, "score_0_100": 48, "band": "Poor" },
+    "toy_plastic":             { "co2e_per_kg": 6,  "score_0_100": 70, "band": "Good" },
+    "bicycle":                 { "co2e_per_kg": 8,  "score_0_100": 68, "band": "Good" },
+    "furniture_wood":          { "co2e_per_kg": 3,  "score_0_100": 82, "band": "Excellent" },
+    "furniture_metal":         { "co2e_per_kg": 9,  "score_0_100": 66, "band": "Good" },
+    "other":                   { "co2e_per_kg": 15, "score_0_100": 50, "band": "Good" }
+  }
+}

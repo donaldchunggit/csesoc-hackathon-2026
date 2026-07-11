@@ -11,6 +11,7 @@ import { parseBomFile, bomTemplateCsv } from './bomParser.js'
 import { generateEcoReport } from './pdfReport.js'
 import { analyzeBom, lastSource } from './analysis.js'
 import { extractBom, fetchNarrative, fetchIncentives } from './api.js'
+import ScanView from './scan/ScanView.jsx'
 
 // --- ecocompass palette (mirrors the CSS vars in theme.css) ----------------
 const T = {
@@ -97,8 +98,19 @@ function TopNav({ view, setView }) {
           <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: '-0.02em', color: '#1A2117' }}>ecocompass</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 26 }}>
-          <button onClick={() => setView(view === 'library' ? 'upload' : view)} style={tab(view !== 'library')}>Analyze BOM</button>
-          <button onClick={() => setView('library')} style={tab(view === 'library')}>Material library</button>
+          {(() => {
+            const isBom = view === 'upload' || view === 'results'
+            return (
+              <>
+                <button onClick={() => setView(isBom ? view : 'upload')} style={tab(isBom)}>Analyze BOM</button>
+                <button onClick={() => setView('library')} style={tab(view === 'library')}>Material library</button>
+                <button onClick={() => setView('scan')} style={{ ...tab(view === 'scan'), display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  Scan a product
+                  <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.good, background: 'rgba(91,122,78,0.14)', borderRadius: 5, padding: '1px 5px' }}>Free</span>
+                </button>
+              </>
+            )
+          })()}
         </div>
       </div>
     </div>
@@ -1469,7 +1481,10 @@ function DetailDrawer({ material, onClose }) {
 const EMPTY_SUGGEST = { name: '', category: 'metal', notes: '', source: '', email: '' }
 
 export default function App() {
-  const [view, setView] = useState('upload') // upload | results | library
+  // /scan is a real, shareable URL (the consumer wedge); other views live at /.
+  const [view, setView] = useState(
+    () => (typeof window !== 'undefined' && window.location.pathname === '/scan' ? 'scan' : 'upload'),
+  ) // upload | results | library | scan
   const [fileName, setFileName] = useState(null)
   const [busy, setBusy] = useState(false)
   const [busyLabel, setBusyLabel] = useState('Reading…')
@@ -1485,6 +1500,18 @@ export default function App() {
   const [showSuggest, setShowSuggest] = useState(false)
   const [suggestSent, setSuggestSent] = useState(false)
   const [suggestForm, setSuggestForm] = useState(EMPTY_SUGGEST)
+
+  // Keep the URL in sync with the scan view so /scan is shareable and the
+  // browser back/forward buttons work, without pulling in a router dependency.
+  useEffect(() => {
+    const onPop = () => setView(window.location.pathname === '/scan' ? 'scan' : 'upload')
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  useEffect(() => {
+    const desired = view === 'scan' ? '/scan' : '/'
+    if (window.location.pathname !== desired) window.history.pushState({}, '', desired)
+  }, [view])
 
   const setSort = (key) => {
     setSortDir((d) => (sortKey === key ? -d : 1))
@@ -1560,6 +1587,7 @@ export default function App() {
 
       {view === 'upload' && <UploadView fileName={fileName} onFile={analyzeFile} onSample={analyzeSample} onLoadSample={loadSample} busy={busy} busyLabel={busyLabel} error={uploadError} />}
       {view === 'results' && <ResultsView setView={setView} bom={bom} meta={meta} warnings={warnings} />}
+      {view === 'scan' && <ScanView />}
       {view === 'library' && (
         <LibraryView
           query={query} setQuery={setQuery}

@@ -13,12 +13,16 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BACKEND_DIR / ".env")
 
 # backend/main holds the CSV/processing pipeline (parse.py, score.py, ...);
-# it isn't a package, so add it to the path to import from it.
+# it isn't a package, so add it to the path to import from it. api/ (this dir)
+# is added too so sibling modules like scan.py import cleanly regardless of how
+# uvicorn resolves the app.
 sys.path.append(str(BACKEND_DIR / "main"))
+sys.path.append(str(Path(__file__).resolve().parent))
 from parse import parse_csv  # noqa: E402
 from score import analyze_bom  # noqa: E402
 from ai import ai_configured, extract_bom, generate_incentives, generate_narrative  # noqa: E402
 from main import library_summary, match_library, score_repairability  # noqa: E402  (data/reference-library pipeline)
+from scan import router as scan_router  # noqa: E402  (consumer "scan a product" wedge)
 
 
 def _overall_grade(score):
@@ -82,6 +86,7 @@ def _ai_unavailable(exc):
     return HTTPException(status_code=503, detail=f"AI unavailable: {exc}")
 
 app = FastAPI(title="ecocompass API")
+app.include_router(scan_router)
 
 # The frontend reaches us through Vite's /api proxy (same-origin in dev), but
 # allow direct localhost calls too so the app works without the proxy.
@@ -103,7 +108,10 @@ def read_root():
         "service": "ecocompass",
         "status": "ok",
         "ai": ai_configured(),
-        "endpoints": ["/upload-csv", "/analyze-bom", "/library-compare", "/narrative", "/extract-bom", "/incentives"],
+        "endpoints": [
+            "/upload-csv", "/analyze-bom", "/library-compare", "/narrative", "/extract-bom", "/incentives",
+            "/scan-barcode", "/scan-photo", "/contribute-product",
+        ],
     }
 
 

@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+from pathlib import Path
 
 import anthropic
 
@@ -501,3 +502,187 @@ def extract_bom(data, filename):
             "note": f"extracted from {filename} with AI",
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# 4) Consumer scan mode — carbon estimate, product-from-photo, scan narrative
+# ---------------------------------------------------------------------------
+# These power the free "scan a product" wedge. They are deliberately thin and
+# self-contained: they reuse the vision/JSON helpers above but never touch the
+# B2B swap engine. Every carbon number is looked up from a static table — the AI
+# only picks the category — so an estimate is clearly labelled and never invented.
+_CARBON_BANDS_PATH = Path(__file__).resolve().parent.parent / "data" / "category_carbon_bands.json"
+_CARBON_BANDS = None
+
+
+def _carbon_bands():
+    """Lazily load and cache the category → carbon-band table."""
+    global _CARBON_BANDS
+    if _CARBON_BANDS is None:
+        with _CARBON_BANDS_PATH.open(encoding="utf-8") as f:
+            _CARBON_BANDS = json.load(f).get("categories", {})
+    return _CARBON_BANDS
+
+
+_CARBON_SYSTEM = """You are a product carbon analyst for a consumer sustainability scanner.
+Given a product name (and maybe a photo and a category hint), infer the most likely product
+category and its main materials, then pick the SINGLE closest category key from the provided list.
+
+Rules:
+- Choose exactly one category key from the list. If nothing fits, choose "other".
+- This is a rough estimate from the product's identity alone — you do NOT have measured data.
+  Never claim certainty. Set "confidence" to "low" normally, or "medium" ONLY when the product
+  name clearly and unambiguously names a category on the list.
+- "materials" is your best guess at the 2-4 dominant materials, lowercase.
+- "rationale" is ONE short plain sentence a shopper can read.
+
+Respond with ONLY this JSON and nothing else:
+{"category": string, "materials": [string], "confidence": "low"|"medium", "rationale": string}"""
+
+
+def estimate_carbon_from_category(product_name="this product", category=None, image_block=None):
+    """Rough, clearly-labelled carbon grade for a scanned product.
+
+    Claude infers the category/materials; the 0-100 score itself comes from the
+    static category_carbon_bands.json table, so we never fabricate the number.
+    Returns a dict tagged source='ai_estimated' with a low/medium confidence, or
+    None if the AI call fails — the caller shows the scores it has and never crashes.
+    """
+    table = _carbon_bands()
+    keys = [k for k in table if k != "other"]
+    hint = f"\nCategory hint (may be wrong): {category}" if category else ""
+    user_text = (
+        f"Product: {product_name}{hint}\n\n"
+        f"Category keys to choose from: {', '.join(keys)}, other\n\n"
+        "Infer the category and materials, then return the specified JSON."
+    )
+    content = []
+    if image_block is not None:
+        content.append(image_block)
+    content.append({"type": "text", "text": user_text})
+    try:
+        msg = client().messages.create(
+            model=MODEL,
+            max_tokens=400,
+            system=[{"type": "text", "text": _CARBON_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": content}],
+        )
+        text = next((b.text for b in msg.content if b.type == "text"), "{}")
+        parsed = _extract_json(text)
+    except Exception:  # noqa: BLE001 — carbon estimate is best-effort; degrade to None
+        return None
+
+    key = str(parsed.get("category") or "other").strip().lower()
+    entry = table.get(key) or table.get("other")
+    if not entry:
+        return None
+    confidence = parsed.get("confidence")
+    if confidence not in ("low", "medium"):
+        confidence = "low"
+    materials = [str(m).strip() for m in (parsed.get("materials") or []) if str(m).strip()][:4]
+    return {
+        "score": int(entry["score_0_100"]),
+        "band": entry["band"],
+        "co2ePerKg": entry["co2e_per_kg"],
+        "category": key,
+        "materials": materials,
+        "confidence": confidence,
+        "rationale": str(parsed.get("rationale") or "").strip(),
+        "source": "ai_estimated",
+    }
+
+
+_PRODUCT_VISION_SYSTEM = """You identify a single consumer product from a photo (its packaging, label, or the item itself).
+Extract only what you can actually see; do not invent details.
+
+Respond with ONLY this JSON and nothing else:
+{"product_name": string, "brand": string, "category": string, "materials": [string], "gtin": string}
+- "gtin" is the barcode digits if a barcode / EAN / UPC number is clearly legible, else "".
+- "category" in plain words (e.g. "smartphone", "washing machine"); "" if unsure.
+- Leave any field you cannot determine as "" (or [] for materials)."""
+
+
+def extract_product_from_image(data, filename):
+    """Best-guess product identity from an uploaded photo.
+
+    Reuses the vision content-block helper shared with extract_bom() rather than
+    duplicating it. Returns product_name / brand / category / materials / gtin,
+    with empty strings for anything not legible in the image.
+    """
+    block = _content_block(data, filename)  # raises ValueError on unreadable types
+    msg = client().messages.create(
+        model=MODEL,
+        max_tokens=500,
+        system=[{"type": "text", "text": _PRODUCT_VISION_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": [
+            block,
+            {"type": "text", "text": "Identify the product as the specified JSON."},
+        ]}],
+    )
+    text = next((b.text for b in msg.content if b.type == "text"), "{}")
+    parsed = _extract_json(text)
+    return {
+        "product_name": str(parsed.get("product_name") or "").strip(),
+        "brand": str(parsed.get("brand") or "").strip(),
+        "category": str(parsed.get("category") or "").strip(),
+        "materials": [str(m).strip() for m in (parsed.get("materials") or []) if str(m).strip()][:6],
+        "gtin": "".join(ch for ch in str(parsed.get("gtin") or "") if ch.isdigit()),
+    }
+
+
+_SCAN_NARRATIVE_SYSTEM = """You write a 2-3 sentence plain-language verdict for a consumer product scanner.
+You are given a JSON object with scores that have ALREADY been computed. Use ONLY those figures — never
+invent a number, a material, or a claim not present in the JSON.
+
+Rules:
+- Mention the repairability grade and the carbon grade in plain words. If a score is null, say we don't
+  have that data yet — do not guess one.
+- Repairability is "verified" (an official durability/repairability index); carbon is "estimated" (an AI
+  guess from the product category, not measured). Make that difference clear and never blur the two.
+- If an alternative is provided, mention it by name as a better-scoring option.
+- Warm, direct, shopper-friendly. No markdown, no emoji, no headings."""
+
+
+def generate_scan_narrative(scan):
+    """Grounded plain-language explanation of a scan result.
+
+    Best-effort: falls back to a deterministic template if the AI call fails, so
+    the result card always has copy (and the template, too, only states figures
+    already present in `scan`)."""
+    try:
+        msg = client().messages.create(
+            model=MODEL,
+            max_tokens=400,
+            system=[{"type": "text", "text": _SCAN_NARRATIVE_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": json.dumps(scan, ensure_ascii=False)}],
+        )
+        out = "".join(b.text for b in msg.content if b.type == "text").strip()
+        if out:
+            return out
+    except Exception:  # noqa: BLE001 — narrative is a nicety; fall back to a template
+        pass
+    return _scan_narrative_fallback(scan)
+
+
+def _scan_narrative_fallback(scan):
+    """Deterministic narrative from the computed figures only (no fabrication)."""
+    name = scan.get("productName") or "This product"
+    parts = []
+    r = scan.get("repairability") or {}
+    if r.get("score") is not None:
+        parts.append(
+            f"{name} scores {r['score']}/100 for repairability "
+            f"({str(r.get('band') or '').lower()}) — a verified figure from the French index."
+        )
+    else:
+        parts.append(f"We don't yet have verified repairability data for {name}.")
+    c = scan.get("carbon") or {}
+    if c.get("score") is not None:
+        parts.append(
+            f"Its estimated carbon grade is {str(c.get('band') or '').lower()} ({c['score']}/100), "
+            "an AI estimate from the product category rather than a measured figure."
+        )
+    alt = scan.get("alternative")
+    if alt:
+        parts.append(f"A better-scoring option is {alt['productName']} ({alt['score']}/100).")
+    return " ".join(parts)

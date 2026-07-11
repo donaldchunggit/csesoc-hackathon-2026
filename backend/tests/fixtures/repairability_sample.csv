@@ -1,0 +1,6 @@
+referentiel_id_modele,id_modele,nom_modele,marque,categorie_produit,note_ir,note_id,note_c1_documentation,note_c2_demontabilite,note_c3_disponibilite_pieces,note_c4_prix_pieces,note_c5_critere_specifique
+GTIN_EAN,3701234567890,Fairphone 5,Fairphone,Smartphone,9,2,9,5,10,9,5,7
+GTIN_EAN,0012345678905,BudgetPhone X,GenericCo,Smartphone,"2,5",,3,1,2,4,2
+GTIN_EAN,4006381333931,EcoWash 2000,LaveVite,Lave-linge,,7,8,6,7,6,9
+INTERNAL_REF,MDL-99823,Prototype Blender,KitchenLab,Blender,8,0,8,7,8,8,8
+GTIN_EAN,3701234567890,Fairphone 5 (relisting),Fairphone,Smartphone,7,5,8,4,8,7,4

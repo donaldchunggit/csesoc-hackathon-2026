@@ -24,6 +24,10 @@ env/
 *.log
 dev.server.log
 
+# Consumer scan mode — runtime data (kept out of git)
+backend/data/contributions/
+backend/data/raw/*.csv
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
