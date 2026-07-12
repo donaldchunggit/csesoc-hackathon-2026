@@ -14,5 +14,7 @@ services:
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false # set this manually in the Render dashboard — never commit it
+      - key: GOUPC_KEY
+        sync: false # optional — general-retail barcode fallback; set in dashboard
       - key: PYTHON_VERSION
         value: "3.11"
