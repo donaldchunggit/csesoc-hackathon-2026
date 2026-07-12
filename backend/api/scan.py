@@ -25,6 +25,7 @@ for _p in (BACKEND_DIR / "data", BACKEND_DIR / "main"):
     if str(_p) not in sys.path:
         sys.path.append(str(_p))
 
+import barcode_lookup  # noqa: E402
 import openfacts_lookup  # noqa: E402
 import repairability_lookup as repair_lookup  # noqa: E402
 from ai import (  # noqa: E402
@@ -94,18 +95,36 @@ def _build_scan(*, gtin, repair_res, product_name, brand, category, image_block=
     """Assemble the combined ScanResult. Never raises for a missing score — an
     absent repairability match becomes needs_contribution, and a failed carbon
     estimate becomes a null carbon block."""
-    # Verified product identity + environmental grade from Open Food Facts (real,
-    # crowd-sourced, no API key). Best-effort: None when offline or not found.
+    # Product identity, widest-coverage first:
+    #   * Open Food Facts — food/grocery, and a VERIFIED environmental grade.
+    #   * UPCitemdb — general retail (electronics, homeware, cosmetics...) so
+    #     non-food barcodes stop coming back as "Unknown product". Identity only.
+    # Both best-effort: None when offline / not found. UPCitemdb is only queried
+    # when OFF didn't already identify the product (it's rate-limited).
     off = openfacts_lookup.lookup_by_gtin(gtin) if gtin else None
+    retail = None
+    if gtin and (off is None or not off.get("product_name")):
+        retail = barcode_lookup.lookup_by_gtin(gtin)
 
     name = (
         product_name
         or (repair_res.product_name if repair_res else None)
         or (off.get("product_name") if off else None)
+        or (retail.get("product_name") if retail else None)
         or "Unknown product"
     )
-    brand = brand or (repair_res.brand if repair_res else None) or (off.get("brand") if off else None)
-    category = category or (repair_res.category if repair_res else None) or (off.get("category") if off else None)
+    brand = (
+        brand
+        or (repair_res.brand if repair_res else None)
+        or (off.get("brand") if off else None)
+        or (retail.get("brand") if retail else None)
+    )
+    category = (
+        category
+        or (repair_res.category if repair_res else None)
+        or (off.get("category") if off else None)
+        or (retail.get("category") if retail else None)
+    )
 
     # Carbon/environmental grade: prefer a VERIFIED Open Food Facts eco-score;
     # only fall back to the clearly-labelled AI estimate when none exists.
@@ -126,13 +145,13 @@ def _build_scan(*, gtin, repair_res, product_name, brand, category, image_block=
         "productName": name,
         "brand": brand,
         "category": category,
-        "productImage": (off.get("image_url") if off else None),
+        "productImage": (off.get("image_url") if off else None) or (retail.get("image_url") if retail else None),
         "repairability": _repair_payload(repair_res),
         "carbon": carbon,  # already provenance-tagged (verified or estimated)
         "alternative": alternative,
         # Ask for a community submission only when we found nothing at all — not
-        # when Open Food Facts already identified the product.
-        "needs_contribution": repair_res is None and off is None,
+        # when a barcode database already identified the product.
+        "needs_contribution": repair_res is None and off is None and retail is None,
     }
     scan["narrative"] = generate_scan_narrative(scan)
     return scan
