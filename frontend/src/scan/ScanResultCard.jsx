@@ -146,8 +146,13 @@ export default function ScanResultCard({ scan }) {
             title="Repairability"
             score={r.score}
             band={r.band}
-            provenanceKind={r.source === 'verified_fr_index' ? 'verified' : 'none'}
-            caption={r.provenance || 'No verified repairability data yet.'}
+            provenanceKind={r.source === 'verified_fr_index' ? 'verified' : (r.source === 'ai_estimated' ? 'estimated' : 'none')}
+            confidence={r.confidence}
+            caption={
+              r.source === 'ai_estimated'
+                ? (r.rationale ? `${r.provenance} — ${r.rationale}` : r.provenance)
+                : (r.provenance || 'No verified repairability data yet.')
+            }
           />
         </Reveal>
         <Reveal index={1} style={{ display: 'flex', flex: 1, minWidth: 200 }}>

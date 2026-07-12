@@ -26,11 +26,13 @@ for _p in (BACKEND_DIR / "data", BACKEND_DIR / "main"):
         sys.path.append(str(_p))
 
 import barcode_lookup  # noqa: E402
+import goupc_lookup  # noqa: E402
 import openfacts_lookup  # noqa: E402
 import repairability_lookup as repair_lookup  # noqa: E402
 from ai import (  # noqa: E402
     _content_block,
     estimate_carbon_from_category,
+    estimate_repairability,
     extract_product_from_image,
     generate_scan_narrative,
 )
@@ -59,6 +61,25 @@ def _repair_payload(res):
         "provenance": PROV_VERIFIED,
         "criteria": res.criteria_breakdown,
         "rawNoteIr": res.raw_note_ir,
+    }
+
+
+def _estimated_repair_payload(est):
+    """AI-estimated repairability, used when there's no verified index match.
+
+    Clearly tagged Estimated (source='ai_estimated') so it can never be confused
+    with a verified French-index score. Returns None if the estimate failed."""
+    if not est:
+        return None
+    return {
+        "score": est["score"],
+        "band": est["band"],
+        "source": "ai_estimated",
+        "provenance": PROV_ESTIMATED,
+        "criteria": est.get("criteria") or {},
+        "rawNoteIr": None,
+        "confidence": est.get("confidence"),
+        "rationale": est.get("rationale"),
     }
 
 
@@ -99,12 +120,14 @@ def _build_scan(*, gtin, repair_res, product_name, brand, category, image_block=
     #   * Open Food Facts — food/grocery, and a VERIFIED environmental grade.
     #   * UPCitemdb — general retail (electronics, homeware, cosmetics...) so
     #     non-food barcodes stop coming back as "Unknown product". Identity only.
-    # Both best-effort: None when offline / not found. UPCitemdb is only queried
-    # when OFF didn't already identify the product (it's rate-limited).
+    #   * Go-UPC — a second general-retail source, tried only when UPCitemdb also
+    #     misses. Identity only, and dormant unless GOUPC_KEY is set.
+    # All best-effort: None when offline / not found. The retail sources are only
+    # queried when OFF didn't already identify the product (they're rate-limited).
     off = openfacts_lookup.lookup_by_gtin(gtin) if gtin else None
     retail = None
     if gtin and (off is None or not off.get("product_name")):
-        retail = barcode_lookup.lookup_by_gtin(gtin)
+        retail = barcode_lookup.lookup_by_gtin(gtin) or goupc_lookup.lookup_by_gtin(gtin)
 
     name = (
         product_name
@@ -126,6 +149,14 @@ def _build_scan(*, gtin, repair_res, product_name, brand, category, image_block=
         or (retail.get("category") if retail else None)
     )
 
+    # Repairability: a VERIFIED French-index match if we have one, else a
+    # clearly-labelled AI estimate (Sonnet) from the product's type/brand.
+    repair_block = _repair_payload(repair_res)
+    if repair_res is None and (name != "Unknown product" or image_block is not None):
+        repair_block = _estimated_repair_payload(
+            estimate_repairability(name, category, brand, image_block=image_block)
+        ) or repair_block
+
     # Carbon/environmental grade: prefer a VERIFIED Open Food Facts eco-score;
     # only fall back to the clearly-labelled AI estimate when none exists.
     carbon = _verified_carbon_payload(off, category)
@@ -146,7 +177,7 @@ def _build_scan(*, gtin, repair_res, product_name, brand, category, image_block=
         "brand": brand,
         "category": category,
         "productImage": (off.get("image_url") if off else None) or (retail.get("image_url") if retail else None),
-        "repairability": _repair_payload(repair_res),
+        "repairability": repair_block,  # verified index match, or an AI estimate
         "carbon": carbon,  # already provenance-tagged (verified or estimated)
         "alternative": alternative,
         # Ask for a community submission only when we found nothing at all — not

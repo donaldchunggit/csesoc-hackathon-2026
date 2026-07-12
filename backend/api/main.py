@@ -107,7 +107,7 @@ def read_root():
     return {
         "service": "ecocompass",
         "status": "ok",
-        "build": "scan-wide-2",  # bump on deploy to confirm new code is live
+        "build": "scan-repair-3",  # bump on deploy to confirm new code is live
         "ai": ai_configured(),
         "endpoints": [
             "/upload-csv", "/analyze-bom", "/library-compare", "/narrative", "/extract-bom", "/incentives",

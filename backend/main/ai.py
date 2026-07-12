@@ -32,6 +32,10 @@ from main import score_repairability  # design-longevity engine (backend/data)
 # ANTHROPIC_MODEL=claude-haiku-4-5 for cheaper/faster at some quality cost.
 MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-opus-4-8"
 
+# Repairability estimates run on Sonnet by default — cheaper/faster than Opus and
+# plenty capable for a grounded, type-level guess. Override with ANTHROPIC_REPAIR_MODEL.
+REPAIR_MODEL = os.environ.get("ANTHROPIC_REPAIR_MODEL") or "claude-sonnet-5"
+
 _client = None
 
 
@@ -625,6 +629,92 @@ def estimate_carbon_from_category(product_name="this product", category=None, im
     }
 
 
+def _band_0_100(score):
+    """Bad / Poor / Good / Excellent — matches the verified-index thresholds."""
+    if score >= 75:
+        return "Excellent"
+    if score >= 50:
+        return "Good"
+    if score >= 25:
+        return "Poor"
+    return "Bad"
+
+
+_REPAIR_SYSTEM = """You are a product repairability analyst for a consumer sustainability scanner.
+Given a product's identity (name, brand, maybe a photo and a category hint), estimate how repairable it
+is — how easily an owner or a local repair shop could fix it and keep it in use instead of replacing it.
+
+Judge on: ease of opening/disassembly, standard vs proprietary screws/glue, modularity, battery/
+consumable replaceability, spare-parts availability and price, repair documentation/community support,
+and how fixable the item's common failures are. Reason from general knowledge of the product TYPE and
+brand reputation — you do NOT have a measured index, so never claim certainty.
+
+Rules:
+- "score" is 0-100 (higher = more repairable).
+- "criteria" gives five 0-100 sub-scores for the axes below.
+- Keep "confidence" "low" normally, or "medium" only when the product type's repairability is
+  well established (e.g. a Fairphone, a classic cast-iron pan).
+- "rationale" is ONE short plain sentence a shopper can read.
+
+Respond with ONLY this JSON and nothing else:
+{"score": number, "confidence": "low"|"medium", "rationale": string,
+ "criteria": {"Documentation": number, "Disassembly & access": number,
+              "Spare-parts availability": number, "Spare-parts price": number,
+              "Category-specific": number}}"""
+
+
+def estimate_repairability(product_name="this product", category=None, brand=None, image_block=None):
+    """Rough, clearly-labelled repairability grade for a scanned product, via Sonnet.
+
+    Used only when there's no VERIFIED index match: the score is an AI estimate from
+    the product's identity/type, tagged source='ai_estimated'. Returns None if the
+    call fails so the caller degrades gracefully."""
+    brand_hint = f"\nBrand: {brand}" if brand else ""
+    cat_hint = f"\nCategory hint (may be wrong): {category}" if category else ""
+    user_text = (
+        f"Product: {product_name}{brand_hint}{cat_hint}\n\n"
+        "Estimate this product's repairability and return the specified JSON."
+    )
+    content = []
+    if image_block is not None:
+        content.append(image_block)
+    content.append({"type": "text", "text": user_text})
+    try:
+        msg = client().messages.create(
+            model=REPAIR_MODEL,
+            max_tokens=600,
+            system=[{"type": "text", "text": _REPAIR_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": content}],
+        )
+        text = next((b.text for b in msg.content if b.type == "text"), "{}")
+        parsed = _extract_json(text)
+    except Exception:  # noqa: BLE001 — repairability estimate is best-effort; degrade to None
+        return None
+
+    try:
+        score = max(0, min(100, int(round(float(parsed.get("score"))))))
+    except (TypeError, ValueError):
+        return None
+    confidence = parsed.get("confidence")
+    if confidence not in ("low", "medium"):
+        confidence = "low"
+    criteria = {}
+    if isinstance(parsed.get("criteria"), dict):
+        for label, val in parsed["criteria"].items():
+            try:
+                criteria[str(label)] = max(0, min(100, int(round(float(val)))))
+            except (TypeError, ValueError):
+                continue
+    return {
+        "score": score,
+        "band": _band_0_100(score),
+        "criteria": criteria,
+        "confidence": confidence,
+        "rationale": str(parsed.get("rationale") or "").strip(),
+        "source": "ai_estimated",
+    }
+
+
 _PRODUCT_VISION_SYSTEM = """You identify a single consumer product from a photo (its packaging, label, or the item itself).
 Extract only what you can actually see; do not invent details.
 
@@ -670,7 +760,9 @@ invent a number, a material, or a claim not present in the JSON.
 Rules:
 - Mention the repairability grade and the carbon/environmental grade in plain words. If a score is null,
   say we don't have that data yet — do not guess one.
-- Repairability, when present, is "verified" (an official durability/repairability index).
+- Repairability: check `repairability.source`. "verified_fr_index" = a VERIFIED score from the French
+  index; "ai_estimated" = an AI ESTIMATE from the product type (not measured); "not_found"/null = no data
+  yet. State which it is and never blur verified vs estimated.
 - For the carbon/environmental grade, check `carbon.verified`: if true it is a VERIFIED environmental
   score from Open Food Facts (a measured Eco-Score, not a guess); if false/absent it is an AI ESTIMATE
   from the product category (not measured). Say which one it is and never blur verified vs estimated.
@@ -705,12 +797,18 @@ def _scan_narrative_fallback(scan):
     parts = []
     r = scan.get("repairability") or {}
     if r.get("score") is not None:
-        parts.append(
-            f"{name} scores {r['score']}/100 for repairability "
-            f"({str(r.get('band') or '').lower()}) — a verified figure from the French index."
-        )
+        if r.get("source") == "ai_estimated":
+            parts.append(
+                f"{name} has an estimated repairability of {str(r.get('band') or '').lower()} "
+                f"({r['score']}/100) — an AI guess from the product type, not a measured index."
+            )
+        else:
+            parts.append(
+                f"{name} scores {r['score']}/100 for repairability "
+                f"({str(r.get('band') or '').lower()}) — a verified figure from the French index."
+            )
     else:
-        parts.append(f"We don't yet have verified repairability data for {name}.")
+        parts.append(f"We don't yet have repairability data for {name}.")
     c = scan.get("carbon") or {}
     if c.get("score") is not None:
         if c.get("verified"):
